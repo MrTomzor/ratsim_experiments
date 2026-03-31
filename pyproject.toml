@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ratsim-experiments"
+version = "0.1.0"
+description = "Experiment automation for the Ratsim simulation framework"
+requires-python = ">=3.9"
+
+dependencies = [
+    "ratsim",
+    "ratsim-wildfire-gym-env",
+    "stable-baselines3>=2.0",
+    "sb3-contrib>=2.0",
+    "gymnasium>=0.29",
+    "numpy",
+    "pyyaml",
+]
