@@ -20,6 +20,7 @@ import itertools
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -270,7 +271,7 @@ def main():
     model_path = overrides.pop("model", None)
     eval_seeds_raw = overrides.pop("eval_seeds", "1,2,3,4,5,6,7,8,9,10")
     episodes_per_seed = int(overrides.pop("episodes_per_seed", 1))
-    run_name = overrides.pop("name", f"eval_{rundef_name}_{method_name}_{int(time.time())}")
+    run_name = overrides.pop("name", f"eval_{rundef_name}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     rtf = float(overrides.pop("rtf", 1.0))
 
     # Parse seeds

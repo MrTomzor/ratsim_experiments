@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -160,7 +161,7 @@ def main():
         sys.exit(1)
 
     # Optional args
-    run_name = overrides.pop("name", f"{rundef_name}_{method_name}_{int(time.time())}")
+    run_name = overrides.pop("name", f"{rundef_name}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
     metaseed = overrides.pop("metaseed", 1)
     method_config_file = overrides.pop("method_config", None)
