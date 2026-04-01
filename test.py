@@ -16,6 +16,7 @@ Usage:
     python test.py def=default_forest_foraging method=human episodes_per_seed=3
 """
 
+import itertools
 import json
 import sys
 import time
@@ -118,26 +119,27 @@ def eval_rl(
     world_config: dict,
     agent_config: dict,
     task_config: dict,
-    seeds: list[int],
+    seeds: list[int] | None,
     episodes_per_seed: int,
     results_file: Path,
 ):
-    for seed in seeds:
-        for ep_idx in range(episodes_per_seed):
-            wc = dict(world_config)
-            wc["seed"] = seed + ep_idx * 10000  # offset for multiple episodes per seed
+    env = WildfireGymEnv(
+        worldgen_config=world_config,
+        agent_config=agent_config,
+        sensor_config={},
+        action_config={"control_mode": "velocity"},
+        task_config=task_config,
+        metaworldgen_config=None,
+    )
 
-            env = WildfireGymEnv(
-                worldgen_config=wc,
-                agent_config=agent_config,
-                sensor_config={},
-                action_config={"control_mode": "velocity"},
-                task_config=task_config,
-                metaworldgen_config=None,
-            )
+    seed_iter = seeds if seeds is not None else itertools.count(1)
+
+    for seed in seed_iter:
+        for ep_idx in range(episodes_per_seed):
+            actual_seed = seed + ep_idx * 10000
 
             t0 = time.time()
-            obs, _ = env.reset()
+            obs, _ = env.reset(options={"seed": actual_seed})
 
             # For recurrent policies, need to track lstm states
             lstm_states = None
@@ -175,7 +177,7 @@ def eval_rl(
             print(f"  seed={seed} ep={ep_idx}: objects={result['objects_found']}, "
                   f"steps={result['steps']}, score={result['total_score']:.2f}")
 
-            env.close()
+    env.close()
 
 
 # -- Human evaluation ---------------------------------------------------------
@@ -187,7 +189,7 @@ def eval_human(
     world_config: dict,
     agent_config: dict,
     task_config: dict,
-    seeds: list[int],
+    seeds: list[int] | None,
     episodes_per_seed: int,
     results_file: Path,
     rtf: float = 1.0,
@@ -204,7 +206,9 @@ def eval_human(
     conn.send_messages_and_step(enable_physics_step=False)
     conn.read_messages_from_unity()
 
-    for seed in seeds:
+    seed_iter = seeds if seeds is not None else itertools.count(1)
+
+    for seed in seed_iter:
         for ep_idx in range(episodes_per_seed):
             wc = dict(world_config)
             actual_seed = seed + ep_idx * 10000
@@ -264,13 +268,15 @@ def main():
 
     method_name = overrides.pop("method", "ppo")
     model_path = overrides.pop("model", None)
-    eval_seeds_raw = overrides.pop("eval_seeds", "42,123,456,789,1337")
+    eval_seeds_raw = overrides.pop("eval_seeds", "1,2,3,4,5,6,7,8,9,10")
     episodes_per_seed = int(overrides.pop("episodes_per_seed", 1))
     run_name = overrides.pop("name", f"eval_{rundef_name}_{method_name}_{int(time.time())}")
     rtf = float(overrides.pop("rtf", 1.0))
 
     # Parse seeds
-    if isinstance(eval_seeds_raw, str):
+    if eval_seeds_raw == "inf":
+        eval_seeds = None  # signals infinite mode
+    elif isinstance(eval_seeds_raw, str):
         eval_seeds = [int(s.strip()) for s in eval_seeds_raw.split(",")]
     elif isinstance(eval_seeds_raw, list):
         eval_seeds = [int(s) for s in eval_seeds_raw]
@@ -292,7 +298,7 @@ def main():
         "rundef": rundef_name,
         "method": method_name,
         "model": model_path,
-        "eval_seeds": eval_seeds,
+        "eval_seeds": "inf" if eval_seeds is None else eval_seeds,
         "episodes_per_seed": episodes_per_seed,
         "run_name": run_name,
     }
@@ -300,7 +306,7 @@ def main():
         json.dump(eval_meta, f, indent=2)
 
     print(f"Evaluating: method={method_name}, rundef={rundef_name}")
-    print(f"Seeds: {eval_seeds}, episodes/seed: {episodes_per_seed}")
+    print(f"Seeds: {'infinite (1,2,3,...)' if eval_seeds is None else eval_seeds}, episodes/seed: {episodes_per_seed}")
     print(f"Results: {results_file}")
 
     # Load model if RL
@@ -316,38 +322,42 @@ def main():
         print(f"Loaded model: {model_path}")
 
     # Evaluate each stage
-    for stage_idx, stage in enumerate(rundef["stages"]):
-        world_config = resolve_world_config(stage)
+    try:
+        for stage_idx, stage in enumerate(rundef["stages"]):
+            world_config = resolve_world_config(stage)
 
-        print(f"\n{'='*60}")
-        print(f"Stage {stage_idx + 1}/{len(rundef['stages'])}: {stage.get('world_presets', ['?'])}")
-        print(f"{'='*60}")
+            print(f"\n{'='*60}")
+            print(f"Stage {stage_idx + 1}/{len(rundef['stages'])}: {stage.get('world_presets', ['?'])}")
+            print(f"{'='*60}")
 
-        if method_name == "human":
-            eval_human(
-                rundef, rundef_name, stage_idx,
-                world_config, agent_config, task_config,
-                eval_seeds, episodes_per_seed, results_file,
-                rtf=rtf,
-            )
-        else:
-            eval_rl(
-                model, rundef, rundef_name, method_name, stage_idx,
-                world_config, agent_config, task_config,
-                eval_seeds, episodes_per_seed, results_file,
-            )
+            if method_name == "human":
+                eval_human(
+                    rundef, rundef_name, stage_idx,
+                    world_config, agent_config, task_config,
+                    eval_seeds, episodes_per_seed, results_file,
+                    rtf=rtf,
+                )
+            else:
+                eval_rl(
+                    model, rundef, rundef_name, method_name, stage_idx,
+                    world_config, agent_config, task_config,
+                    eval_seeds, episodes_per_seed, results_file,
+                )
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user.")
 
     # Print summary
     print(f"\n{'='*60}")
     print("Evaluation complete.")
     print(f"Results written to: {results_file}")
 
-    import pandas as pd
-    df = pd.read_json(results_file, lines=True)
-    print(f"\nSummary ({len(df)} episodes):")
-    print(f"  objects_found: {df['objects_found'].mean():.1f} ± {df['objects_found'].std():.1f}")
-    print(f"  total_score:   {df['total_score'].mean():.2f} ± {df['total_score'].std():.2f}")
-    print(f"  steps:         {df['steps'].mean():.0f} ± {df['steps'].std():.0f}")
+    if results_file.exists():
+        import pandas as pd
+        df = pd.read_json(results_file, lines=True)
+        print(f"\nSummary ({len(df)} episodes):")
+        print(f"  objects_found: {df['objects_found'].mean():.1f} ± {df['objects_found'].std():.1f}")
+        print(f"  total_score:   {df['total_score'].mean():.2f} ± {df['total_score'].std():.2f}")
+        print(f"  steps:         {df['steps'].mean():.0f} ± {df['steps'].std():.0f}")
 
 
 if __name__ == "__main__":
