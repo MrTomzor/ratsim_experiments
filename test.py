@@ -42,12 +42,17 @@ from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 # -- Run definition loading --------------------------------------------------
 
-def load_rundef(name: str) -> dict:
+def load_rundef(name_or_path: str) -> dict:
+    """Load a run definition YAML by name or file path."""
+    path = Path(name_or_path)
+    if path.suffix in (".yaml", ".yml") and path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f)
     rundef_dir = Path(__file__).parent / "rundefs"
-    path = rundef_dir / f"{name}.yaml"
+    path = rundef_dir / f"{name_or_path}.yaml"
     if not path.exists():
         available = [f.stem for f in rundef_dir.glob("*.yaml")]
-        raise FileNotFoundError(f"Run definition '{name}' not found. Available: {available}")
+        raise FileNotFoundError(f"Run definition '{name_or_path}' not found. Available: {available}")
     with open(path) as f:
         return yaml.safe_load(f)
 
@@ -266,12 +271,13 @@ def main():
     if rundef_name is None:
         print("Usage: python test.py def=<rundef_name> [model=<path>] [method=<name>] [eval_seeds=1,2,3]")
         sys.exit(1)
+    rundef_name_clean = Path(rundef_name).stem
 
     method_name = overrides.pop("method", "ppo")
     model_path = overrides.pop("model", None)
     eval_seeds_raw = overrides.pop("eval_seeds", "1,2,3,4,5,6,7,8,9,10")
     episodes_per_seed = int(overrides.pop("episodes_per_seed", 1))
-    run_name = overrides.pop("name", f"eval_{rundef_name}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    run_name = overrides.pop("name", f"eval_{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     rtf = float(overrides.pop("rtf", 1.0))
 
     # Parse seeds
@@ -296,7 +302,7 @@ def main():
 
     # Save eval config
     eval_meta = {
-        "rundef": rundef_name,
+        "rundef": rundef_name_clean,
         "method": method_name,
         "model": model_path,
         "eval_seeds": "inf" if eval_seeds is None else eval_seeds,
@@ -333,14 +339,14 @@ def main():
 
             if method_name == "human":
                 eval_human(
-                    rundef, rundef_name, stage_idx,
+                    rundef, rundef_name_clean, stage_idx,
                     world_config, agent_config, task_config,
                     eval_seeds, episodes_per_seed, results_file,
                     rtf=rtf,
                 )
             else:
                 eval_rl(
-                    model, rundef, rundef_name, method_name, stage_idx,
+                    model, rundef, rundef_name_clean, method_name, stage_idx,
                     world_config, agent_config, task_config,
                     eval_seeds, episodes_per_seed, results_file,
                 )

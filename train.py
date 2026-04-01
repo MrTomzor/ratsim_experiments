@@ -29,14 +29,19 @@ from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 # -- Run definition loading --------------------------------------------------
 
-def load_rundef(name: str) -> dict:
-    """Load a run definition YAML by name from the rundefs/ directory."""
+def load_rundef(name_or_path: str) -> dict:
+    """Load a run definition YAML by name or file path."""
+    path = Path(name_or_path)
+    if path.suffix in (".yaml", ".yml") and path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f)
+    # Fall back to looking up by name in rundefs/
     rundef_dir = Path(__file__).parent / "rundefs"
-    path = rundef_dir / f"{name}.yaml"
+    path = rundef_dir / f"{name_or_path}.yaml"
     if not path.exists():
         available = [f.stem for f in rundef_dir.glob("*.yaml")]
         raise FileNotFoundError(
-            f"Run definition '{name}' not found at {path}\n"
+            f"Run definition '{name_or_path}' not found at {path}\n"
             f"Available: {available}"
         )
     with open(path) as f:
@@ -159,9 +164,10 @@ def main():
     if rundef_name is None:
         print("Usage: python train.py def=<rundef_name> method=<method_name> [overrides...]")
         sys.exit(1)
+    rundef_name_clean = Path(rundef_name).stem  # strip path and .yaml extension
 
     # Optional args
-    run_name = overrides.pop("name", f"{rundef_name}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    run_name = overrides.pop("name", f"{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
     metaseed = overrides.pop("metaseed", 1)
     method_config_file = overrides.pop("method_config", None)
@@ -191,7 +197,7 @@ def main():
 
     # Save the full resolved config for reproducibility
     run_meta = {
-        "rundef": rundef_name,
+        "rundef": rundef_name_clean,
         "method": method_name,
         "method_config": method_config,
         "step_multiplier": step_multiplier,
