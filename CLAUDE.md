@@ -69,26 +69,34 @@ ratsim_experiments/
 
 ## Usage
 
+The `def=` argument accepts either a name (looked up in `rundefs/`) or a file path (tab-completable). File paths are sanitized automatically for result folder naming.
+
 ```bash
-# Train
+# Train (by name or path)
 python train.py def=default_forest_foraging method=ppo name=my_run
+python train.py def=rundefs/default_forest_foraging.yaml method=ppo
 python train.py def=default_forest_foraging method=recurrent_ppo step_multiplier=2.0
 
 # Evaluate trained model
 python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip
 python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip eval_seeds=42,123,456
 
-# Human evaluation
-python test.py def=default_forest_foraging method=human
+# Infinite eval (runs seeds 1,2,3,... until Ctrl+C, then prints summary)
+python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip eval_seeds=inf
+
+# Human evaluation (with real-time factor for smooth visuals)
+python test.py def=default_forest_foraging method=human rtf=1.0
 
 # Method config overrides
 python train.py def=default_forest_foraging method=ppo method.learning_rate=1e-4
 python train.py def=default_forest_foraging method=recurrent_ppo method_config=configs/lstm256.yaml
 ```
 
+Result folders are named `<rundef>_<method>_<YYYYMMDD_HHMMSS>` (e.g., `default_forest_foraging_ppo_20260401_143022`).
+
 ## Seeds
 
-- **Eval seeds**: fixed list passed to test.py, shared across all methods for fair comparison. Default: 42,123,456,789,1337.
+- **Eval seeds**: fixed list passed to test.py, shared across all methods for fair comparison. Default: 1-10. Use `eval_seeds=inf` for continuous evaluation.
 - **Training seeds (metaseed)**: controls world generation randomness during training. Pass `metaseed=N` to train.py. Eval seeds must never appear in training.
 - **Training run seeds**: run the same config multiple times with different metaseeds to get error bars.
 

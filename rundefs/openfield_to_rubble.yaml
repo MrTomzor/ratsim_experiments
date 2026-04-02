@@ -1,0 +1,8 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: rubble_bootcamp
+
+stages:
+  - world_presets: [default]
+    steps: 300_000
+  - world_presets: [rubble_bootcamp]
+    steps: 700_000
