@@ -1,0 +1,11 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: default
+
+stages:
+  - world_presets: [static_forest_foraging_small]
+    steps: 300_000
+  - world_presets: [static_forest_foraging_small]
+    world_overrides:
+      world_bounds/width: 250
+      world_bounds/height: 250
+    steps: 700_000

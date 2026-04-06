@@ -3,6 +3,4 @@ task_preset: rubble_bootcamp
 
 stages:
   - world_presets: [rubble_bootcamp]
-    world_overrides:
-      vegetation/tree1/density: 0.01
     steps: 1_000_000
