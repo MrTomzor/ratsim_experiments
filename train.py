@@ -59,12 +59,19 @@ def resolve_world_config(stage: dict) -> dict:
     return cfg
 
 
-def resolve_task_config(rundef: dict) -> dict:
-    """Load and optionally override task config."""
+def resolve_task_config(rundef: dict, stage: dict | None = None) -> dict:
+    """Load and optionally override task config.
+
+    Rundef-level task_overrides are applied first, then stage-level task_overrides
+    (if a stage dict is provided) take precedence.
+    """
     task_preset = rundef.get("task_preset", "default")
     cfg = blend_presets("task", [task_preset])
     overrides = rundef.get("task_overrides", {})
     cfg.update(overrides)
+    if stage is not None:
+        stage_overrides = stage.get("task_overrides", {})
+        cfg.update(stage_overrides)
     return cfg
 
 
@@ -88,9 +95,49 @@ METHODS = {
 }
 
 
-def create_model(method_name: str, env, method_config: dict, tb_log_dir: str):
+def get_max_episode_steps(rundef: dict, stages: list[dict]) -> int:
+    """Return the maximum episode_max_steps across all stages."""
+    base_task = blend_presets("task", [rundef.get("task_preset", "default")])
+    base_task.update(rundef.get("task_overrides", {}))
+    max_steps = base_task.get("episode_max_steps", 300)
+    for stage in stages:
+        stage_task = dict(base_task)
+        stage_task.update(stage.get("task_overrides", {}))
+        max_steps = max(max_steps, stage_task.get("episode_max_steps", max_steps))
+    return max_steps
+
+
+# Recurrent PPO preset profiles. Select via method.recurrent_preset=<name>
+# or override individual params with method.n_steps=... etc.
+RECURRENT_PRESETS = {
+    # A) Full-episode unroll — correct LSTM training, slow on CPU
+    "full_episode": {
+        "n_steps": "auto",      # set to max episode_max_steps across stages
+        "batch_size": "auto",   # set to n_steps
+        "n_epochs": 15,
+    },
+    # B) SB3 defaults — fast but sequences split across batches
+    "sb3_default": {
+        "n_steps": 128,
+        "batch_size": 128,
+        "n_epochs": 10,
+    },
+    # C) Balanced — shorter unrolls + smaller LSTM, practical for CPU
+    "balanced": {
+        "n_steps": 512,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "policy_kwargs": {"lstm_hidden_size": 128, "n_lstm_layers": 1},
+    },
+}
+RECURRENT_PRESET_DEFAULT = "balanced"
+
+
+def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
+                 max_episode_steps: int | None = None):
     """Create an SB3 model from method name and config."""
     method = METHODS[method_name]
+    is_recurrent = method_name == "recurrent_ppo"
 
     # Defaults that can be overridden by method_config
     kwargs = {
@@ -103,6 +150,20 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str):
         "gamma": 0.99,
         "tensorboard_log": tb_log_dir,
     }
+
+    # For recurrent policies: apply a preset profile, then let method_config override.
+    if is_recurrent:
+        preset_name = method_config.pop("recurrent_preset", RECURRENT_PRESET_DEFAULT)
+        preset = RECURRENT_PRESETS[preset_name]
+        print(f"[RecurrentPPO] Using preset '{preset_name}': {preset}")
+
+        for k, v in preset.items():
+            if k not in method_config:
+                if v == "auto" and max_episode_steps is not None:
+                    v = max(2048, max_episode_steps)
+                    print(f"[RecurrentPPO] Auto {k}={v} (max episode_max_steps={max_episode_steps})")
+                kwargs[k] = v
+
     kwargs.update(method_config)
 
     return method["sb3_class"](**kwargs)
@@ -188,7 +249,6 @@ def main():
     stages = rundef["stages"]
 
     # Resolve configs
-    task_config = resolve_task_config(rundef)
     agent_config = resolve_agent_config(rundef)
 
     # Output directory
@@ -215,9 +275,11 @@ def main():
     # Train each stage sequentially
     model = None
     total_steps_trained = 0
+    max_episode_steps = get_max_episode_steps(rundef, stages)
 
     for stage_idx, stage in enumerate(stages):
         world_config = resolve_world_config(stage)
+        task_config = resolve_task_config(rundef, stage)
         stage_steps = int(stage["steps"] * step_multiplier)
 
         print(f"\n{'='*60}")
@@ -239,7 +301,8 @@ def main():
         env = make_vec_env(make_env, n_envs=1)
 
         if model is None:
-            model = create_model(method_name, env, method_config, tb_log_dir)
+            model = create_model(method_name, env, method_config, tb_log_dir,
+                                max_episode_steps=max_episode_steps)
         else:
             # Continue training with new env
             model.set_env(env)

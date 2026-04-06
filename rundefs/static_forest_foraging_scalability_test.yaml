@@ -4,8 +4,16 @@ task_preset: default
 stages:
   - world_presets: [static_forest_foraging_small]
     steps: 300_000
+    # task_overrides:
+    #   episode_max_steps: 1500
+    
+    world_overrides:
+      reward_objects/uniform_density: "0.002"
   - world_presets: [static_forest_foraging_small]
     world_overrides:
-      world_bounds/width: 250
-      world_bounds/height: 250
+      world_bounds/width: 200
+      world_bounds/height: 200
+      reward_objects/uniform_density: "0.001"
+    # task_overrides:
+    #   episode_max_steps: 3000
     steps: 700_000

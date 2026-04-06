@@ -66,9 +66,16 @@ def resolve_world_config(stage: dict) -> dict:
     return cfg
 
 
-def resolve_task_config(rundef: dict) -> dict:
+def resolve_task_config(rundef: dict, stage: dict | None = None) -> dict:
+    """Load and optionally override task config.
+
+    Rundef-level task_overrides are applied first, then stage-level task_overrides
+    (if a stage dict is provided) take precedence.
+    """
     cfg = blend_presets("task", [rundef.get("task_preset", "default")])
     cfg.update(rundef.get("task_overrides", {}))
+    if stage is not None:
+        cfg.update(stage.get("task_overrides", {}))
     return cfg
 
 
@@ -292,7 +299,6 @@ def main():
 
     # Load run definition
     rundef = load_rundef(rundef_name)
-    task_config = resolve_task_config(rundef)
     agent_config = resolve_agent_config(rundef)
 
     # Output
@@ -332,6 +338,7 @@ def main():
     try:
         for stage_idx, stage in enumerate(rundef["stages"]):
             world_config = resolve_world_config(stage)
+            task_config = resolve_task_config(rundef, stage)
 
             print(f"\n{'='*60}")
             print(f"Stage {stage_idx + 1}/{len(rundef['stages'])}: {stage.get('world_presets', ['?'])}")
