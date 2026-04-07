@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import torch as th
 import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
@@ -169,6 +170,52 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
     return method["sb3_class"](**kwargs)
 
 
+# -- Stage transition resets ---------------------------------------------------
+
+def reset_critic(model):
+    """Reinitialize value function weights, keeping the policy (actor) intact.
+
+    Resets: mlp_extractor critic path, value_net head, and for RecurrentPPO
+    the lstm_critic and critic projection if they exist.
+    """
+    policy = model.policy
+
+    def reinit_module(module):
+        if module is None:
+            return
+        for layer in module.modules():
+            if isinstance(layer, th.nn.Linear):
+                th.nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+                th.nn.init.constant_(layer.bias, 0.0)
+            elif isinstance(layer, th.nn.LSTM):
+                for name, param in layer.named_parameters():
+                    if "weight" in name:
+                        th.nn.init.orthogonal_(param)
+                    elif "bias" in name:
+                        th.nn.init.constant_(param, 0.0)
+
+    # MLP extractor critic path
+    reinit_module(policy.mlp_extractor.value_net)
+    # Final value head (Linear -> 1)
+    th.nn.init.orthogonal_(policy.value_net.weight, gain=1.0)
+    th.nn.init.constant_(policy.value_net.bias, 0.0)
+    # RecurrentPPO: separate critic LSTM and projection
+    if hasattr(policy, "lstm_critic") and policy.lstm_critic is not None:
+        reinit_module(policy.lstm_critic)
+    if hasattr(policy, "critic") and policy.critic is not None:
+        reinit_module(policy.critic)
+
+    print("[StageTransition] Critic weights reinitialized")
+
+
+def reset_optimizer(model):
+    """Reset optimizer state (Adam momentum/variance) so stale statistics
+    from the previous stage don't interfere with the new distribution."""
+    for state in model.policy.optimizer.state.values():
+        state.clear()
+    print("[StageTransition] Optimizer state cleared")
+
+
 # -- Callback -----------------------------------------------------------------
 
 class TrainingMetricsCallback(BaseCallback):
@@ -230,7 +277,9 @@ def main():
     # Optional args
     run_name = overrides.pop("name", f"{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
-    metaseed = overrides.pop("metaseed", 1)
+    # If no metaseed provided, generate random number (not a benchmark with specific seed -> want some variability between runs)
+    default_metaseed = np.random.randint(0, 10000)
+    metaseed = overrides.pop("metaseed", default_metaseed)
     method_config_file = overrides.pop("method_config", None)
 
     # Load method config from file if specified, then apply remaining overrides
@@ -300,17 +349,26 @@ def main():
 
         env = make_vec_env(make_env, n_envs=1)
 
-        if model is None:
+        is_stage_transition = model is not None
+        reset_on_stage = rundef.get("reset_on_stage_change", False)
+
+        if not is_stage_transition:
             model = create_model(method_name, env, method_config, tb_log_dir,
                                 max_episode_steps=max_episode_steps)
         else:
             # Continue training with new env
             model.set_env(env)
 
+            # Stage transition resets
+            if reset_on_stage:
+                reset_critic(model)
+                reset_optimizer(model)
+
         model.learn(
             total_timesteps=stage_steps,
             callback=TrainingMetricsCallback(),
-            reset_num_timesteps=False,  # keep global step counter across stages
+            # Reset LR schedule on stage change so it doesn't continue decayed
+            reset_num_timesteps=is_stage_transition and reset_on_stage,
         )
 
         total_steps_trained += stage_steps

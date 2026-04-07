@@ -1,11 +1,12 @@
 agent_preset: sphereagent_2d_lidar
 task_preset: default
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
 
 stages:
   - world_presets: [static_forest_foraging_small]
     steps: 300_000
     # task_overrides:
-    #   episode_max_steps: 1500
+    #   episode_max_steps: 300
     
     world_overrides:
       reward_objects/uniform_density: "0.002"
