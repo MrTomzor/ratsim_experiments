@@ -3,6 +3,4 @@ task_preset: default
 
 stages:
   - world_presets: [default]
-    world_overrides:
-      vegetation/tree1/density: 0.01
     steps: 1_000_000

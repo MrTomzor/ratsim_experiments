@@ -1,0 +1,14 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: default
+
+stages:
+  - world_presets: [default]
+    steps: 100_000
+    world_overrides:
+      reward_objects/uniform_density: "0.001"
+  - world_presets: [default]
+    steps: 900_000
+    world_overrides:
+      reward_objects/uniform_density: "0.0"
+
+

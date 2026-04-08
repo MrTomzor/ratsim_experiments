@@ -18,6 +18,7 @@ Usage:
 
 import itertools
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -255,6 +256,96 @@ def eval_human(
                   f"steps={result['steps']}, score={result['total_score']:.2f}")
 
 
+# -- Frontier exploration evaluation -------------------------------------------
+
+def eval_frontier(
+    rundef: dict,
+    rundef_name: str,
+    stage_idx: int,
+    world_config: dict,
+    agent_config: dict,
+    task_config: dict,
+    seeds: list[int] | None,
+    episodes_per_seed: int,
+    results_file: Path,
+):
+    """Evaluate the ROS2 frontier exploration method.
+
+    Launches the ROS2 frontier_exploration launch file as a subprocess.
+    The bridge node runs the episode loop internally and prints one JSON
+    line per episode to stdout.  We read those lines and record them.
+    """
+    seed_list = seeds if seeds is not None else list(range(1, 10001))
+    seeds_str = ",".join(str(s) for s in seed_list)
+
+    world_json = json.dumps(world_config)
+    agent_json = json.dumps(agent_config)
+    task_json = json.dumps(task_config)
+
+    cmd = [
+        "ros2", "launch", "ratsim_ros2", "frontier_exploration.launch.py",
+        f"world_config_json:={world_json}",
+        f"agent_config_json:={agent_json}",
+        f"task_config_json:={task_json}",
+        f"seeds:={seeds_str}",
+        f"episodes_per_seed:={episodes_per_seed}",
+    ]
+
+    print(f"Launching: {' '.join(cmd[:4])} ...")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,  # line-buffered
+    )
+
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Try to parse as JSON (episode result from bridge node)
+            try:
+                episode_data = json.loads(line)
+            except json.JSONDecodeError:
+                # Not JSON — print as log output
+                print(f"  [ros2] {line}")
+                continue
+
+            # Build result in the standard JSONL schema
+            result = {
+                "method": "frontier",
+                "rundef": rundef_name,
+                "stage_idx": stage_idx,
+                "seed": episode_data.get("seed", 0),
+                "episode_idx": episode_data.get("episode_idx", 0),
+                "steps": episode_data.get("steps", 0),
+                "total_score": episode_data.get("total_score", 0.0),
+                "objects_found": episode_data.get("objects_found", 0),
+                "collisions": episode_data.get("collisions", 0),
+                "termination_reason": episode_data.get("termination_reason", "unknown"),
+                "distance_traveled": 0.0,  # TODO: add distance tracking
+                "wall_time_s": 0.0,  # TODO: add timing
+            }
+            append_result(results_file, result)
+            print(
+                f"  seed={result['seed']} ep={result['episode_idx']}: "
+                f"objects={result['objects_found']}, steps={result['steps']}, "
+                f"score={result['total_score']:.2f}"
+            )
+
+    except KeyboardInterrupt:
+        print("\nInterrupting ROS2 process...")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 # -- CLI -----------------------------------------------------------------------
 
 def parse_overrides(override_list: list[str]) -> dict:
@@ -322,11 +413,11 @@ def main():
     print(f"Seeds: {'infinite (1,2,3,...)' if eval_seeds is None else eval_seeds}, episodes/seed: {episodes_per_seed}")
     print(f"Results: {results_file}")
 
-    # Load model if RL
+    # Load model if RL (not needed for human or frontier)
     model = None
-    if method_name != "human":
+    if method_name not in ("human", "frontier"):
         if model_path is None:
-            print("Error: model=<path> required for non-human methods")
+            print("Error: model=<path> required for non-human/non-frontier methods")
             sys.exit(1)
         if method_name == "recurrent_ppo":
             model = RecurrentPPO.load(model_path)
@@ -350,6 +441,12 @@ def main():
                     world_config, agent_config, task_config,
                     eval_seeds, episodes_per_seed, results_file,
                     rtf=rtf,
+                )
+            elif method_name == "frontier":
+                eval_frontier(
+                    rundef, rundef_name_clean, stage_idx,
+                    world_config, agent_config, task_config,
+                    eval_seeds, episodes_per_seed, results_file,
                 )
             else:
                 eval_rl(

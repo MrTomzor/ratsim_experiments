@@ -1,0 +1,29 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: default
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
+
+stages:
+  - world_presets: [static_forest_foraging_small]
+    world_overrides:
+      world_bounds/width: 200
+      world_bounds/height: 200
+      reward_objects/uniform_density: "0.001"
+    steps: 250_000
+  - world_presets: [static_forest_foraging_small]
+    world_overrides:
+      world_bounds/width: 200
+      world_bounds/height: 200
+      reward_objects/uniform_density: "0.001"
+    steps: 250_000
+  - world_presets: [static_forest_foraging_small]
+    world_overrides:
+      world_bounds/width: 200
+      world_bounds/height: 200
+      reward_objects/uniform_density: "0.001"
+    steps: 250_000
+  - world_presets: [static_forest_foraging_small]
+    world_overrides:
+      world_bounds/width: 200
+      world_bounds/height: 200
+      reward_objects/uniform_density: "0.001"
+    steps: 250_000
