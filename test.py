@@ -29,6 +29,9 @@ import yaml
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 
+from feature_extractors import LidarCnnExtractor  # noqa: F401 — needed for model deserialization
+from train import METHODS
+
 from ratsim.roslike_unity_connector.connector import RoslikeUnityConnector
 from ratsim.roslike_unity_connector.message_definitions import (
     BoolMessage,
@@ -419,10 +422,10 @@ def main():
         if model_path is None:
             print("Error: model=<path> required for non-human/non-frontier methods")
             sys.exit(1)
-        if method_name == "recurrent_ppo":
-            model = RecurrentPPO.load(model_path)
-        else:
-            model = PPO.load(model_path)
+        if method_name not in METHODS:
+            print(f"Error: unknown method '{method_name}'. Available: {list(METHODS.keys())}")
+            sys.exit(1)
+        model = METHODS[method_name]["sb3_class"].load(model_path)
         print(f"Loaded model: {model_path}")
 
     # Evaluate each stage

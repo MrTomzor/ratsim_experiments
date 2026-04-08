@@ -4,6 +4,8 @@ Train an RL agent on a run definition.
 Usage:
     python train.py def=default_forest_foraging method=ppo
     python train.py def=default_forest_foraging method=recurrent_ppo
+    python train.py def=default_forest_foraging method=cnn_ppo
+    python train.py def=default_forest_foraging method=cnn_recurrent_ppo
     python train.py def=default_forest_foraging method=ppo name=my_run step_multiplier=2.0
     python train.py def=default_forest_foraging method=ppo metaseed=42
 """
@@ -26,6 +28,7 @@ from sb3_contrib import RecurrentPPO
 
 from ratsim.config_blender import blend_presets
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
+from feature_extractors import LidarCnnExtractor
 
 
 # -- Run definition loading --------------------------------------------------
@@ -93,6 +96,22 @@ METHODS = {
         "sb3_class": RecurrentPPO,
         "policy": "MultiInputLstmPolicy",
     },
+    "cnn_ppo": {
+        "sb3_class": PPO,
+        "policy": "MultiInputPolicy",
+        "policy_kwargs": {
+            "features_extractor_class": LidarCnnExtractor,
+            "features_extractor_kwargs": {},
+        },
+    },
+    "cnn_recurrent_ppo": {
+        "sb3_class": RecurrentPPO,
+        "policy": "MultiInputLstmPolicy",
+        "policy_kwargs": {
+            "features_extractor_class": LidarCnnExtractor,
+            "features_extractor_kwargs": {},
+        },
+    },
 }
 
 
@@ -138,7 +157,7 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
                  max_episode_steps: int | None = None):
     """Create an SB3 model from method name and config."""
     method = METHODS[method_name]
-    is_recurrent = method_name == "recurrent_ppo"
+    is_recurrent = method["sb3_class"] is RecurrentPPO
 
     # Defaults that can be overridden by method_config
     kwargs = {
@@ -152,6 +171,23 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
         "tensorboard_log": tb_log_dir,
     }
 
+    # Carry over policy_kwargs defined in the METHODS entry (e.g. CNN extractor).
+    if "policy_kwargs" in method:
+        import copy
+        kwargs["policy_kwargs"] = copy.deepcopy(method["policy_kwargs"])
+
+    # Auto-populate CNN extractor params from the env.
+    if "policy_kwargs" in kwargs and "features_extractor_kwargs" in kwargs.get("policy_kwargs", {}):
+        ext_kwargs = kwargs["policy_kwargs"]["features_extractor_kwargs"]
+        # Unwrap VecEnv (DummyVecEnv/SubprocVecEnv) to reach the actual Gym env.
+        unwrapped = env.envs[0].unwrapped if hasattr(env, "envs") else env.unwrapped
+        ext_kwargs.setdefault("n_rays", unwrapped.num_lidar_rays)
+        ext_kwargs.setdefault("n_channels", unwrapped.num_lidar_channels)
+        # Allow CLI overrides (method.cnn_output_dim, method.mlp_output_dim, etc.)
+        for pname in ("n_rays", "n_channels", "cnn_output_dim"):
+            if pname in method_config:
+                ext_kwargs[pname] = int(method_config.pop(pname))
+
     # For recurrent policies: apply a preset profile, then let method_config override.
     if is_recurrent:
         preset_name = method_config.pop("recurrent_preset", RECURRENT_PRESET_DEFAULT)
@@ -163,7 +199,15 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
                 if v == "auto" and max_episode_steps is not None:
                     v = max(2048, max_episode_steps)
                     print(f"[RecurrentPPO] Auto {k}={v} (max episode_max_steps={max_episode_steps})")
-                kwargs[k] = v
+                # Deep-merge policy_kwargs from preset into existing policy_kwargs
+                if k == "policy_kwargs" and "policy_kwargs" in kwargs:
+                    kwargs["policy_kwargs"].update(v)
+                else:
+                    kwargs[k] = v
+
+    # Deep-merge policy_kwargs from method_config into existing policy_kwargs
+    if "policy_kwargs" in method_config and "policy_kwargs" in kwargs:
+        kwargs["policy_kwargs"].update(method_config.pop("policy_kwargs"))
 
     kwargs.update(method_config)
 
