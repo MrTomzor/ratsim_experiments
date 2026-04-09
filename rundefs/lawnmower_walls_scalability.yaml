@@ -1,0 +1,13 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: foraging_1000_collision_penalty
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
+
+stages:
+  - world_presets: [lawnmower_walls]
+    steps: 250_000
+  - world_presets: [lawnmower_walls]
+    steps: 250_000
+  - world_presets: [lawnmower_walls]
+    steps: 250_000
+  - world_presets: [lawnmower_walls]
+    steps: 250_000

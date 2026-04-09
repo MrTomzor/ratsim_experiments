@@ -1,0 +1,25 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: foraging_1000_collision_penalty
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
+
+stages:
+  - world_presets: [static_rockmaze_foraging]
+    world_overrides:
+      world_bounds/width: 120
+      world_bounds/height: 120
+    steps: 250_000
+  - world_presets: [static_rockmaze_foraging]
+    world_overrides:
+      world_bounds/width: 120
+      world_bounds/height: 120
+    steps: 250_000
+  - world_presets: [static_rockmaze_foraging]
+    world_overrides:
+      world_bounds/width: 120
+      world_bounds/height: 120
+    steps: 250_000
+  - world_presets: [static_rockmaze_foraging]
+    world_overrides:
+      world_bounds/width: 120
+      world_bounds/height: 120
+    steps: 250_000

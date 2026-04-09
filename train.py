@@ -211,7 +211,37 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
 
     kwargs.update(method_config)
 
-    return method["sb3_class"](**kwargs)
+    model = method["sb3_class"](**kwargs)
+    print_model_summary(model)
+    return model
+
+
+def print_model_summary(model):
+    """Print key model size info for sanity checking."""
+    policy = model.policy
+
+    # Features extractor output dim
+    feat_dim = policy.features_extractor.features_dim
+    extractor_name = type(policy.features_extractor).__name__
+    print(f"\n{'='*50}")
+    print(f"MODEL SUMMARY")
+    print(f"{'='*50}")
+    print(f"Features extractor: {extractor_name} -> {feat_dim}-dim")
+
+    # LSTM info if recurrent
+    if hasattr(policy, "lstm_actor"):
+        lstm = policy.lstm_actor
+        print(f"LSTM (actor):  hidden_size={lstm.hidden_size}, num_layers={lstm.num_layers}")
+    if hasattr(policy, "lstm_critic") and policy.lstm_critic is not None:
+        lstm = policy.lstm_critic
+        print(f"LSTM (critic): hidden_size={lstm.hidden_size}, num_layers={lstm.num_layers}")
+
+    # Total parameters
+    total = sum(p.numel() for p in policy.parameters())
+    trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+    print(f"Total parameters:     {total:,}")
+    print(f"Trainable parameters: {trainable:,}")
+    print(f"{'='*50}\n")
 
 
 # -- Stage transition resets ---------------------------------------------------
