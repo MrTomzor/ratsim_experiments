@@ -1,0 +1,23 @@
+# DreamerV3 method deps (CPU JAX variant of ~/git/dreamerv3/requirements.txt).
+# Skips ale-py / autorom / nvidia-cuda-nvcc since we don't need Atari or CUDA locally.
+# Install into a dedicated venv (e.g. ~/ratvenv/dreamer_venv), then editable-install
+# ratsim and ratsim_wildfire_gym_env on top, and editable-install ~/git/dreamerv3.
+jax==0.4.33
+av
+chex
+colored_traceback
+einops
+elements>=3.19.1
+google-resumable-media>=2.7.2
+granular>=0.20.3
+ipdb
+jaxtyping
+ninjax>=3.5.1
+numpy<2
+optax
+portal>=3.5.0
+scope>=0.4.4
+tqdm
+ruamel.yaml
+gymnasium
+pyyaml
