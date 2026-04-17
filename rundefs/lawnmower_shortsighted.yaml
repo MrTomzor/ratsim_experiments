@@ -11,3 +11,7 @@ stages:
     steps: 250_000
   - world_presets: [lawnmower_mini, mod_reward_signals_80range]
     steps: 250_000
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    steps: 250_000
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    steps: 250_000

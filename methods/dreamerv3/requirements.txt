@@ -21,3 +21,6 @@ tqdm
 ruamel.yaml
 gymnasium
 pyyaml
+# TF 2.21 has a regression (bool/callable bug in profiler.trace); pin to 2.19.1.
+# Required by elements.logger.TensorBoardOutput as the events writer backend.
+tensorflow-cpu==2.19.1

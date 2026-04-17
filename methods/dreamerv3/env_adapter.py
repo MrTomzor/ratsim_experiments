@@ -55,6 +55,11 @@ class GymnasiumToEmbodied(embodied.Env):
             "is_first": elements.Space(bool),
             "is_last": elements.Space(bool),
             "is_terminal": elements.Space(bool),
+            # log/ keys are not fed to the agent; embodied.run.train aggregates
+            # them per episode (avg, max, sum) and writes to the logger.
+            "log/reward_pickups": elements.Space(np.float32),
+            "log/distance_traveled": elements.Space(np.float32),
+            "log/step_distance": elements.Space(np.float32),
         }
 
     @functools.cached_property
@@ -113,6 +118,17 @@ class GymnasiumToEmbodied(embodied.Env):
             is_first=is_first,
             is_last=is_last,
             is_terminal=is_terminal,
+        )
+        # Populate log/ metrics from the underlying gym env.
+        env = self._env
+        obs["log/reward_pickups"] = np.float32(
+            env.get_reward_pickups() if hasattr(env, "get_reward_pickups") else 0
+        )
+        obs["log/distance_traveled"] = np.float32(
+            env.get_distance_traveled() if hasattr(env, "get_distance_traveled") else 0
+        )
+        obs["log/step_distance"] = np.float32(
+            env.longest_step_distance if hasattr(env, "longest_step_distance") else 0
         )
         return obs
 

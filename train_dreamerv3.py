@@ -10,9 +10,9 @@ Mirrors the CLI of train.py for parity with the SB3 methods:
 Notes
 -----
 * Activate the dreamer venv first: ``source ~/ratvenv/dreamer_venv/bin/activate``.
-* DreamerV3 doesn't natively do staged training the way SB3 does in train.py,
-  so this trainer runs **stage 0 only** for now. Multi-stage support can be
-  layered on later by re-entering the embodied train loop with a new env.
+* Multi-stage rundefs are supported: each stage re-enters the embodied train
+  loop with a new env factory (potentially different world_presets) while the
+  agent checkpoint and replay buffer carry over. The step counter is cumulative.
 * Defaults assume CPU JAX (``jax.platform=cpu``); pass
   ``method.jax.platform=cuda`` on a GPU box.
 """
@@ -145,7 +145,7 @@ def make_agent(config, rundef, stage, metaseed):
 
 # -- Config assembly ---------------------------------------------------------
 
-DEFAULT_SIZE = "size12m"
+DEFAULT_SIZE = "size1m"
 
 
 def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: str):
@@ -173,7 +173,7 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "jax.platform": "cpu",
         "jax.compute_dtype": "float32",
         "jax.prealloc": False,
-        "logger.outputs": ["jsonl"],
+        "logger.outputs": ["jsonl", "tensorboard"],
     })
 
     # User overrides (`method.jax.platform=cuda`, `method.batch_size=4`, etc.)
@@ -213,56 +213,81 @@ def main():
 
     rundef = load_rundef(rundef_name)
     stages = rundef["stages"]
-    if len(stages) > 1:
-        print(f"[dreamerv3] WARNING: rundef has {len(stages)} stages; "
-              "training stage 0 only (multi-stage not yet supported).")
-    stage = stages[0]
-    total_steps = int(stage["steps"] * step_multiplier)
 
     results_dir = Path(__file__).parent / "results" / run_name
     results_dir.mkdir(parents=True, exist_ok=True)
     logdir = results_dir / "dreamer_logdir"
     logdir.mkdir(exist_ok=True)
 
-    with open(results_dir / "run_config.json", "w") as f:
-        json.dump({
-            "rundef": rundef_stem,
-            "method": "dreamerv3",
-            "size": size,
-            "step_multiplier": step_multiplier,
-            "metaseed": metaseed,
-            "run_name": run_name,
-            "method_overrides": method_overrides,
-            "stage_index": 0,
-        }, f, indent=2)
+    # Cumulative step target across stages — embodied.run.train uses an
+    # absolute step counter, so stage N trains from sum(stages[:N]) to
+    # sum(stages[:N+1]).  The agent checkpoint + replay buffer persist
+    # across calls because the logdir is the same.
+    cumulative_steps = 0
 
-    config = build_config(method_overrides, logdir, total_steps, size)
-    config.save(elements.Path(str(logdir)) / "config.yaml")
+    for stage_idx, stage in enumerate(stages):
+        stage_steps = int(stage["steps"] * step_multiplier)
+        cumulative_steps += stage_steps
 
-    # embodied train loop assembly — same shape as dreamerv3.main.main.
-    args_cfg = elements.Config(
-        **config.run,
-        replica=config.replica,
-        replicas=config.replicas,
-        logdir=str(logdir),
-        batch_size=config.batch_size,
-        batch_length=config.batch_length,
-        report_length=config.report_length,
-        consec_train=config.consec_train,
-        consec_report=config.consec_report,
-        replay_context=config.replay_context,
-    )
+        print(f"\n{'='*60}")
+        print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)}: "
+              f"{stage.get('world_presets', ['?'])}")
+        print(f"[dreamerv3] Stage steps: {stage_steps}  |  "
+              f"Cumulative target: {cumulative_steps}")
+        print(f"{'='*60}")
 
-    embodied.run.train(
-        bind(make_agent, config, rundef, stage, metaseed),
-        bind(make_replay, config, "replay"),
-        bind(make_env, config, rundef, stage, metaseed),
-        bind(make_stream, config),
-        bind(make_logger, config),
-        args_cfg,
-    )
+        with open(results_dir / "run_config.json", "w") as f:
+            json.dump({
+                "rundef": rundef_stem,
+                "method": "dreamerv3",
+                "size": size,
+                "step_multiplier": step_multiplier,
+                "metaseed": metaseed,
+                "run_name": run_name,
+                "method_overrides": method_overrides,
+                "stage_index": stage_idx,
+                "cumulative_steps": cumulative_steps,
+            }, f, indent=2)
 
-    print(f"\n[dreamerv3] Training complete. Logdir: {logdir}")
+        config = build_config(method_overrides, logdir, cumulative_steps, size)
+        config.save(elements.Path(str(logdir)) / "config.yaml")
+
+        if stage_idx == 0:
+            print(f"\n[dreamerv3] size preset: {size}")
+            print(f"[dreamerv3]   rssm.deter={config.agent.dyn.rssm.deter}, "
+                  f"hidden={config.agent.dyn.rssm.hidden}, "
+                  f"classes={config.agent.dyn.rssm.classes}")
+            print(f"[dreamerv3]   units={config.agent.policy.units}, "
+                  f"enc.depth={config.agent.enc.simple.depth}")
+            print(f"[dreamerv3]   batch_size={config.batch_size}, "
+                  f"batch_length={config.batch_length}, "
+                  f"train_ratio={config.run.train_ratio}")
+
+        args_cfg = elements.Config(
+            **config.run,
+            replica=config.replica,
+            replicas=config.replicas,
+            logdir=str(logdir),
+            batch_size=config.batch_size,
+            batch_length=config.batch_length,
+            report_length=config.report_length,
+            consec_train=config.consec_train,
+            consec_report=config.consec_report,
+            replay_context=config.replay_context,
+        )
+
+        embodied.run.train(
+            bind(make_agent, config, rundef, stage, metaseed),
+            bind(make_replay, config, "replay"),
+            bind(make_env, config, rundef, stage, metaseed),
+            bind(make_stream, config),
+            bind(make_logger, config),
+            args_cfg,
+        )
+
+        print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)} complete.")
+
+    print(f"\n[dreamerv3] All {len(stages)} stages complete. Logdir: {logdir}")
 
 
 if __name__ == "__main__":
