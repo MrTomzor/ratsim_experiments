@@ -37,13 +37,39 @@ stages:
 
 ### Method-invariant evaluation
 
-All methods produce the same JSONL output (`results/<run_name>/episodes.jsonl`), one JSON object per episode:
+All methods produce the same JSONL schema, one JSON object per episode:
 
 ```json
-{"method": "ppo", "rundef": "...", "stage_idx": 0, "seed": 42, "episode_idx": 0, "steps": 300, "total_score": 15.0, "objects_found": 3, "collisions": 1, "termination_reason": "max_steps", "distance_traveled": 450.2, "wall_time_s": 12.3}
+{"method": "ppo", "rundef": "...", "stage_idx": 0, "seed": 42, "episode_idx": 1, "steps": 300, "total_score": 15.0, "objects_found": 3, "collisions": 1, "termination_reason": "max_steps", "distance_traveled": 450.2, "wall_time_s": 12.3}
 ```
 
+- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices.
+- **Evaluation**: `results/<run_name>/eval_episodes.jsonl` — written by `test.py` via `make_episode_result()`.
+- **DONE marker**: `results/<run_name>/DONE` (empty file) is touched at the end of a successful run. `analyze_run_data.py` warns on any run dir missing it (run crashed or still in progress).
+
 TaskTracker (from the core ratsim repo) is the single source of truth for episode metrics regardless of method.
+
+### Checkpoints
+
+- **PPO** (`train.py`): saves `checkpoints/stage_<i>.zip` after each stage, plus `checkpoints/final.zip`.
+- **DreamerV3** (`train_dreamerv3.py`): embodied's rolling `ckpt/latest` pointer is snapshotted into `checkpoints/stage_<i>/` after each stage and `checkpoints/final/` at the end, mirroring PPO's per-stage layout.
+
+### Analysis
+
+`analyze_run_data.py` loads one or more `train_episodes.jsonl` files and emits terminal summaries + PNGs. Accepts any mix of run dirs, parent dirs, and symlinks (recursive, follows symlinks). Validates schema/monotonicity/DONE marker and flags issues.
+
+```bash
+# Single run
+python analyze_run_data.py results/my_run/
+
+# A whole batch (parent dir, recursive)
+python analyze_run_data.py results/batch_20260420/ --out analysis_output/ --rolling 20
+
+# Cherry-picked runs via symlink farm
+python analyze_run_data.py symlinks/comparison_A/
+```
+
+Needs the sb3 venv (pandas + matplotlib): `~/ratvenv/venv/bin/python analyze_run_data.py ...`.
 
 ### Human evaluation
 
@@ -53,16 +79,24 @@ Human control is handled via `/enable_human_control` topic sent to Unity. The co
 
 ```
 ratsim_experiments/
-├── train.py              # Train RL agents on a run definition
-├── test.py               # Evaluate any method on a run definition (RL, human, etc.)
-├── rundefs/              # Named run definitions (YAML)
+├── train.py                 # Train PPO / RecurrentPPO on a run definition
+├── train_dreamerv3.py       # Train DreamerV3 (separate venv — jax/embodied)
+├── test.py                  # Evaluate a method on a run definition (RL, human, etc.)
+├── analyze_run_data.py      # Load train_episodes.jsonl(s) → tables + plots
+├── overnight_batch.sh       # Example bash queue for long unattended runs
+├── rundefs/                 # Named run definitions (YAML)
 │   └── *.yaml
-├── results/              # Output directory (gitignored)
+├── results/                 # Output directory (gitignored)
 │   └── <run_name>/
 │       ├── run_config.json or eval_config.json
-│       ├── episodes.jsonl
+│       ├── train_episodes.jsonl    # training episodes, written by env
+│       ├── eval_episodes.jsonl     # eval episodes, written by test.py
+│       ├── DONE                    # empty marker file, touched on clean finish
 │       ├── tensorboard/
 │       └── checkpoints/
+│           ├── stage_0.zip / stage_0/    # PPO: zip; Dreamer: dir
+│           ├── ...
+│           └── final.zip / final/
 ├── pyproject.toml
 └── .gitignore
 ```
