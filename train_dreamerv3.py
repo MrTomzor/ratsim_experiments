@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime
 from functools import partial as bind
@@ -183,6 +184,29 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
     return config
 
 
+# -- Checkpoint snapshotting -------------------------------------------------
+
+def snapshot_latest_ckpt(logdir: Path, dest: Path) -> None:
+    """Copy embodied's rolling `ckpt/latest` into a stable per-stage dest.
+
+    Mirrors PPO's per-stage checkpoint behavior so the eval script can load
+    `results/<run>/checkpoints/stage_N/` directly.
+    """
+    latest_pointer = logdir / "ckpt" / "latest"
+    if not latest_pointer.exists():
+        print(f"[dreamerv3] WARNING: no ckpt/latest at {latest_pointer}; skipping snapshot")
+        return
+    latest_name = latest_pointer.read_text().strip()
+    src = logdir / "ckpt" / latest_name
+    if not src.exists():
+        print(f"[dreamerv3] WARNING: ckpt/latest -> {src} does not exist; skipping snapshot")
+        return
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+    print(f"[dreamerv3] Snapshot: {dest}")
+
+
 # -- Main --------------------------------------------------------------------
 
 def main():
@@ -218,6 +242,8 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
     logdir = results_dir / "dreamer_logdir"
     logdir.mkdir(exist_ok=True)
+    ckpt_dir = results_dir / "checkpoints"
+    ckpt_dir.mkdir(exist_ok=True)
 
     # Cumulative step target across stages — embodied.run.train uses an
     # absolute step counter, so stage N trains from sum(stages[:N]) to
@@ -285,8 +311,10 @@ def main():
             args_cfg,
         )
 
+        snapshot_latest_ckpt(logdir, ckpt_dir / f"stage_{stage_idx}")
         print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)} complete.")
 
+    snapshot_latest_ckpt(logdir, ckpt_dir / "final")
     print(f"\n[dreamerv3] All {len(stages)} stages complete. Logdir: {logdir}")
 
 
