@@ -402,6 +402,13 @@ def main():
     checkpoint_dir = results_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True)
 
+    episode_log_path = results_dir / "train_episodes.jsonl"
+    base_run_metadata = {
+        "method": method_name,
+        "rundef": rundef_name_clean,
+        "seed": int(metaseed),
+    }
+
     # Train each stage sequentially
     model = None
     total_steps_trained = 0
@@ -417,8 +424,10 @@ def main():
         print(f"Steps: {stage_steps} (multiplier: {step_multiplier})")
         print(f"{'='*60}\n")
 
+        stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
+
         # Build env with this stage's world config
-        def make_env(wc=world_config):
+        def make_env(wc=world_config, md=stage_run_metadata):
             return WildfireGymEnv(
                 worldgen_config=wc,
                 agent_config=agent_config,
@@ -426,6 +435,8 @@ def main():
                 action_config={"control_mode": "velocity"},
                 task_config=task_config,
                 metaworldgen_config={"world_generation_metaseed": metaseed},
+                episode_log_path=episode_log_path,
+                run_metadata=md,
             )
 
         env = make_vec_env(make_env, n_envs=1)
@@ -464,6 +475,9 @@ def main():
     # Save final model
     final_path = checkpoint_dir / "final"
     model.save(str(final_path))
+
+    (results_dir / "DONE").touch()
+
     print(f"\nTraining complete. Final model: {final_path}")
     print(f"Total steps: {total_steps_trained}")
     print(f"Results dir: {results_dir}")

@@ -101,7 +101,9 @@ def parse_args():
 
 # -- Env factory passed to embodied ------------------------------------------
 
-def _build_gym_env(rundef: dict, stage: dict, metaseed: int) -> WildfireGymEnv:
+def _build_gym_env(rundef: dict, stage: dict, metaseed: int,
+                   episode_log_path: "Path | None" = None,
+                   run_metadata: "dict | None" = None) -> WildfireGymEnv:
     return WildfireGymEnv(
         worldgen_config=resolve_world_config(stage),
         agent_config=resolve_agent_config(rundef),
@@ -109,13 +111,18 @@ def _build_gym_env(rundef: dict, stage: dict, metaseed: int) -> WildfireGymEnv:
         action_config={"control_mode": "velocity"},
         task_config=resolve_task_config(rundef, stage),
         metaworldgen_config={"world_generation_metaseed": metaseed},
+        episode_log_path=episode_log_path,
+        run_metadata=run_metadata,
     )
 
 
-def make_env(config, rundef, stage, metaseed, index, **overrides):
+def make_env(config, rundef, stage, metaseed, index,
+             episode_log_path=None, run_metadata=None, **overrides):
     """embodied-style env factory. `index` is the parallel env index (we use 1)."""
     del overrides, index  # single-env, no per-index variation
-    gym_env = _build_gym_env(rundef, stage, metaseed)
+    gym_env = _build_gym_env(rundef, stage, metaseed,
+                             episode_log_path=episode_log_path,
+                             run_metadata=run_metadata)
     env = GymnasiumToEmbodied(gym_env, obs_key="vector", act_key="action")
     return wrap_env(env, config)
 
@@ -123,6 +130,7 @@ def make_env(config, rundef, stage, metaseed, index, **overrides):
 def make_agent(config, rundef, stage, metaseed):
     """embodied-style agent factory; mirrors dreamerv3.main.make_agent."""
     from dreamerv3.agent import Agent
+    # Agent factory builds a temporary env to read obs/act spaces; no logging needed here.
     env = make_env(config, rundef, stage, metaseed, 0)
     notlog = lambda k: not k.startswith("log/")
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
@@ -245,6 +253,13 @@ def main():
     ckpt_dir = results_dir / "checkpoints"
     ckpt_dir.mkdir(exist_ok=True)
 
+    episode_log_path = results_dir / "train_episodes.jsonl"
+    base_run_metadata = {
+        "method": "dreamerv3",
+        "rundef": rundef_stem,
+        "seed": int(metaseed),
+    }
+
     # Cumulative step target across stages — embodied.run.train uses an
     # absolute step counter, so stage N trains from sum(stages[:N]) to
     # sum(stages[:N+1]).  The agent checkpoint + replay buffer persist
@@ -302,10 +317,14 @@ def main():
             replay_context=config.replay_context,
         )
 
+        stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
+
         embodied.run.train(
             bind(make_agent, config, rundef, stage, metaseed),
             bind(make_replay, config, "replay"),
-            bind(make_env, config, rundef, stage, metaseed),
+            bind(make_env, config, rundef, stage, metaseed,
+                 episode_log_path=episode_log_path,
+                 run_metadata=stage_run_metadata),
             bind(make_stream, config),
             bind(make_logger, config),
             args_cfg,
@@ -315,6 +334,7 @@ def main():
         print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)} complete.")
 
     snapshot_latest_ckpt(logdir, ckpt_dir / "final")
+    (results_dir / "DONE").touch()
     print(f"\n[dreamerv3] All {len(stages)} stages complete. Logdir: {logdir}")
 
 
