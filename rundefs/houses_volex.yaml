@@ -3,11 +3,11 @@ task_preset: volumetric_exploration_2000_collision_penalty
 # reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
 
 stages:
-  - world_presets: [empty_box_basichouses]
+  - world_presets: [empty_box_130_houses]
     steps: 250_000
-  - world_presets: [empty_box_basichouses]
+  - world_presets: [empty_box_130_houses]
     steps: 250_000
-  - world_presets: [empty_box_basichouses]
+  - world_presets: [empty_box_130_houses]
     steps: 250_000
-  - world_presets: [empty_box_basichouses]
+  - world_presets: [empty_box_130_houses]
     steps: 250_000

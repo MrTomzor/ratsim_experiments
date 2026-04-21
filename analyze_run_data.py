@@ -109,6 +109,8 @@ def print_summary(df: pd.DataFrame) -> None:
         mean_objects=("objects_found", "mean"),
         mean_coll=("collisions", "mean"),
         mean_dist=("distance_traveled", "mean"),
+        **({"mean_explored_m2": ("explored_area_m2", "mean")}
+           if "explored_area_m2" in df.columns else {}),
         wall_s=("wall_time_s", "sum"),
         done=("done_marker", "first"),
     )
@@ -255,7 +257,10 @@ def main() -> None:
     print("\n" + "=" * 72)
     print(f"PLOTS -> {out_dir}/")
     print("=" * 72)
-    for metric in ("total_score", "objects_found", "collisions", "distance_traveled"):
+    metrics = ["total_score", "objects_found", "collisions", "distance_traveled"]
+    if "explored_area_m2" in df.columns:
+        metrics.append("explored_area_m2")
+    for metric in metrics:
         plot_curve(df, out_dir, metric=metric, x="episode_idx", rolling=args.rolling)
     plot_curve(df, out_dir, metric="total_score", x="cum_steps", rolling=args.rolling)
     plot_termination_reasons(df, out_dir)
