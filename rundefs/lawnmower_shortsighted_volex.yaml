@@ -1,0 +1,21 @@
+agent_preset: sphereagent_2d_lidar_shortsighted
+task_preset: volumetric_exploration_1000_collision_penalty
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
+
+stages:
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    world_overrides:
+      reward_objects/uniform_density: "0.0"
+    steps: 250_000
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    world_overrides:
+      reward_objects/uniform_density: "0.0"
+    steps: 250_000
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    world_overrides:
+      reward_objects/uniform_density: "0.0"
+    steps: 250_000
+  - world_presets: [lawnmower_mini, mod_reward_signals_80range]
+    world_overrides:
+      reward_objects/uniform_density: "0.0"
+    steps: 250_000
