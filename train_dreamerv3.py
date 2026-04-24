@@ -277,6 +277,17 @@ def main():
               f"Cumulative target: {cumulative_steps}")
         print(f"{'='*60}")
 
+        # Skip stages already completed in a prior run. embodied.run.train uses
+        # an absolute step counter, so re-entering a completed stage would load
+        # the checkpoint, exit immediately (target already reached), and
+        # overwrite the snapshot with itself — wasting time setting up the env,
+        # agent and JAX compilation on each pass.
+        stage_snapshot = ckpt_dir / f"stage_{stage_idx}"
+        if stage_snapshot.exists():
+            print(f"[dreamerv3] Snapshot exists at {stage_snapshot}; "
+                  f"stage already complete, skipping.")
+            continue
+
         with open(results_dir / "run_config.json", "w") as f:
             json.dump({
                 "rundef": rundef_stem,
