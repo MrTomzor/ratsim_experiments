@@ -179,7 +179,7 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "run.agent_process": False,
         "run.remote_envs": False,
         "run.remote_replay": False,
-        "jax.platform": "cpu",
+        "jax.platform": "cuda",
         "jax.compute_dtype": "float32",
         "jax.prealloc": False,
         "logger.outputs": ["jsonl", "tensorboard"],
