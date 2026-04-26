@@ -13,8 +13,8 @@ Notes
 * Multi-stage rundefs are supported: each stage re-enters the embodied train
   loop with a new env factory (potentially different world_presets) while the
   agent checkpoint and replay buffer carry over. The step counter is cumulative.
-* Defaults assume CPU JAX (``jax.platform=cpu``); pass
-  ``method.jax.platform=cuda`` on a GPU box.
+* Defaults to CUDA JAX (``jax.platform=cuda``); pass
+  ``method.jax.platform=cpu`` to force CPU on a box without a GPU.
 """
 from __future__ import annotations
 
@@ -246,7 +246,8 @@ def main():
     metaseed = int(overrides.pop("metaseed", np.random.randint(0, 10000)))
     size = overrides.pop("size", DEFAULT_SIZE)
     n_envs = int(overrides.pop("n_envs", 1))
-    base_port = int(overrides.pop("base_port", 9100))
+    base_port_arg = overrides.pop("base_port", None)
+    base_port = int(base_port_arg) if base_port_arg is not None else None
 
     method_overrides = {}
     method_config_file = overrides.pop("method_config", None)
@@ -275,7 +276,10 @@ def main():
     }
 
     # Allocate Unity ports up front; reused across stages.
-    unity_instances = allocate_unity_instances(n_envs=n_envs, base_port=base_port)
+    alloc_kwargs = {"n_envs": n_envs}
+    if base_port is not None:
+        alloc_kwargs["base_port"] = base_port
+    unity_instances = allocate_unity_instances(**alloc_kwargs)
     unity_ports = [inst.port for inst in unity_instances]
     print(f"[dreamerv3] n_envs={n_envs}, unity_ports={unity_ports}")
 

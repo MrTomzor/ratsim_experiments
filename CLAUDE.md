@@ -127,7 +127,7 @@ python train.py def=default_forest_foraging method=recurrent_ppo method_config=c
 
 # Vectorized training (requires RATSIM_UNITY_BIN; spawns n_envs Unity instances on 9100+)
 python train.py def=default_forest_foraging method=ppo n_envs=8
-python train_dreamerv3.py def=default_forest_foraging n_envs=2 method.jax.platform=cuda
+python train_dreamerv3.py def=default_forest_foraging n_envs=2  # CUDA by default; use method.jax.platform=cpu to force CPU
 
 # Two parallel runs on the same box: pass non-overlapping base_port
 python train.py def=default_forest_foraging method=ppo n_envs=4 base_port=9100  # uses 9100-9103
@@ -182,8 +182,8 @@ policy, single optimizer. Use this to speed up *one* training run.
 # One PPO run, 8 parallel envs (ports 9100–9107)
 python train.py def=default_forest_foraging method=ppo n_envs=8
 
-# One DreamerV3 run, 2 parallel envs (GPU recommended)
-python train_dreamerv3.py def=default_forest_foraging n_envs=2 method.jax.platform=cuda
+# One DreamerV3 run, 2 parallel envs (CUDA is default)
+python train_dreamerv3.py def=default_forest_foraging n_envs=2
 ```
 
 **Parallel runs** — N independent training processes, each with its own

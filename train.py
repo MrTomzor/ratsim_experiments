@@ -365,7 +365,8 @@ def main():
     run_name = overrides.pop("name", f"{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
     n_envs = int(overrides.pop("n_envs", 1))
-    base_port = int(overrides.pop("base_port", 9100))
+    base_port_arg = overrides.pop("base_port", None)
+    base_port = int(base_port_arg) if base_port_arg is not None else None
     # If no metaseed provided, generate random number (not a benchmark with specific seed -> want some variability between runs)
     default_metaseed = np.random.randint(0, 10000)
     metaseed = overrides.pop("metaseed", default_metaseed)
@@ -418,7 +419,10 @@ def main():
     }
 
     # Allocate Unity instances once for the whole run; ports persist across stages.
-    unity_instances = allocate_unity_instances(n_envs=n_envs, base_port=base_port)
+    alloc_kwargs = {"n_envs": n_envs}
+    if base_port is not None:
+        alloc_kwargs["base_port"] = base_port
+    unity_instances = allocate_unity_instances(**alloc_kwargs)
     unity_ports = [inst.port for inst in unity_instances]
     print(f"[train] n_envs={n_envs}, unity_ports={unity_ports}")
 
