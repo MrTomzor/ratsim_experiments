@@ -37,6 +37,7 @@ import dreamerv3
 from dreamerv3.main import make_logger, make_replay, make_stream, wrap_env
 
 from ratsim.config_blender import blend_presets
+from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
@@ -103,7 +104,8 @@ def parse_args():
 
 def _build_gym_env(rundef: dict, stage: dict, metaseed: int,
                    episode_log_path: "Path | None" = None,
-                   run_metadata: "dict | None" = None) -> WildfireGymEnv:
+                   run_metadata: "dict | None" = None,
+                   unity_port: int = 9000) -> WildfireGymEnv:
     return WildfireGymEnv(
         worldgen_config=resolve_world_config(stage),
         agent_config=resolve_agent_config(rundef),
@@ -113,25 +115,34 @@ def _build_gym_env(rundef: dict, stage: dict, metaseed: int,
         metaworldgen_config={"world_generation_metaseed": metaseed},
         episode_log_path=episode_log_path,
         run_metadata=run_metadata,
+        unity_port=unity_port,
     )
 
 
 def make_env(config, rundef, stage, metaseed, index,
-             episode_log_path=None, run_metadata=None, **overrides):
-    """embodied-style env factory. `index` is the parallel env index (we use 1)."""
-    del overrides, index  # single-env, no per-index variation
-    gym_env = _build_gym_env(rundef, stage, metaseed,
+             episode_log_path=None, run_metadata=None,
+             unity_ports=None, **overrides):
+    """embodied-style env factory. `index` selects which Unity port to use."""
+    del overrides
+    if unity_ports is None:
+        unity_ports = [9000]
+    port = unity_ports[index % len(unity_ports)]
+    md = run_metadata
+    if md is not None:
+        md = {**md, "env_idx": index}
+    gym_env = _build_gym_env(rundef, stage, metaseed + index,
                              episode_log_path=episode_log_path,
-                             run_metadata=run_metadata)
+                             run_metadata=md,
+                             unity_port=port)
     env = GymnasiumToEmbodied(gym_env, obs_key="vector", act_key="action")
     return wrap_env(env, config)
 
 
-def make_agent(config, rundef, stage, metaseed):
+def make_agent(config, rundef, stage, metaseed, unity_ports):
     """embodied-style agent factory; mirrors dreamerv3.main.make_agent."""
     from dreamerv3.agent import Agent
     # Agent factory builds a temporary env to read obs/act spaces; no logging needed here.
-    env = make_env(config, rundef, stage, metaseed, 0)
+    env = make_env(config, rundef, stage, metaseed, 0, unity_ports=unity_ports)
     notlog = lambda k: not k.startswith("log/")
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
     act_space = {k: v for k, v in env.act_space.items() if k != "reset"}
@@ -157,7 +168,8 @@ def make_agent(config, rundef, stage, metaseed):
 DEFAULT_SIZE = "size1m"
 
 
-def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: str):
+def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: str,
+                 n_envs: int = 1):
     """Load dreamerv3's configs.yaml, apply size preset, then our overrides."""
     cfg_path = Path(dreamerv3.__file__).parent / "configs.yaml"
     raw = ryaml.YAML(typ="safe").load(cfg_path.read_text())
@@ -171,7 +183,7 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "batch_size": 8,
         "batch_length": 32,
         "report_length": 32,
-        "run.envs": 1,
+        "run.envs": int(n_envs),
         "run.eval_envs": 0,
         "run.steps": int(total_steps),
         "run.train_ratio": 32.0,
@@ -233,6 +245,8 @@ def main():
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
     metaseed = int(overrides.pop("metaseed", np.random.randint(0, 10000)))
     size = overrides.pop("size", DEFAULT_SIZE)
+    n_envs = int(overrides.pop("n_envs", 1))
+    base_port = int(overrides.pop("base_port", 9100))
 
     method_overrides = {}
     method_config_file = overrides.pop("method_config", None)
@@ -259,6 +273,11 @@ def main():
         "rundef": rundef_stem,
         "seed": int(metaseed),
     }
+
+    # Allocate Unity ports up front; reused across stages.
+    unity_instances = allocate_unity_instances(n_envs=n_envs, base_port=base_port)
+    unity_ports = [inst.port for inst in unity_instances]
+    print(f"[dreamerv3] n_envs={n_envs}, unity_ports={unity_ports}")
 
     # Cumulative step target across stages — embodied.run.train uses an
     # absolute step counter, so stage N trains from sum(stages[:N]) to
@@ -301,7 +320,7 @@ def main():
                 "cumulative_steps": cumulative_steps,
             }, f, indent=2)
 
-        config = build_config(method_overrides, logdir, cumulative_steps, size)
+        config = build_config(method_overrides, logdir, cumulative_steps, size, n_envs=n_envs)
         config.save(elements.Path(str(logdir)) / "config.yaml")
 
         if stage_idx == 0:
@@ -331,11 +350,12 @@ def main():
         stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
 
         embodied.run.train(
-            bind(make_agent, config, rundef, stage, metaseed),
+            bind(make_agent, config, rundef, stage, metaseed, unity_ports),
             bind(make_replay, config, "replay"),
             bind(make_env, config, rundef, stage, metaseed,
                  episode_log_path=episode_log_path,
-                 run_metadata=stage_run_metadata),
+                 run_metadata=stage_run_metadata,
+                 unity_ports=unity_ports),
             bind(make_stream, config),
             bind(make_logger, config),
             args_cfg,

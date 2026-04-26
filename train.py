@@ -23,10 +23,12 @@ import torch as th
 import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from sb3_contrib import RecurrentPPO
 
 from ratsim.config_blender import blend_presets
+from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 from feature_extractors import LidarCnnExtractor
 
@@ -362,6 +364,8 @@ def main():
     # Optional args
     run_name = overrides.pop("name", f"{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     step_multiplier = float(overrides.pop("step_multiplier", 1.0))
+    n_envs = int(overrides.pop("n_envs", 1))
+    base_port = int(overrides.pop("base_port", 9100))
     # If no metaseed provided, generate random number (not a benchmark with specific seed -> want some variability between runs)
     default_metaseed = np.random.randint(0, 10000)
     metaseed = overrides.pop("metaseed", default_metaseed)
@@ -413,6 +417,11 @@ def main():
         "seed": int(metaseed),
     }
 
+    # Allocate Unity instances once for the whole run; ports persist across stages.
+    unity_instances = allocate_unity_instances(n_envs=n_envs, base_port=base_port)
+    unity_ports = [inst.port for inst in unity_instances]
+    print(f"[train] n_envs={n_envs}, unity_ports={unity_ports}")
+
     # Train each stage sequentially
     model = None
     total_steps_trained = 0
@@ -430,20 +439,35 @@ def main():
 
         stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
 
-        # Build env with this stage's world config
-        def make_env(wc=world_config, md=stage_run_metadata):
-            return WildfireGymEnv(
-                worldgen_config=wc,
-                agent_config=agent_config,
-                sensor_config={},
-                action_config={"control_mode": "velocity"},
-                task_config=task_config,
-                metaworldgen_config={"world_generation_metaseed": metaseed},
-                episode_log_path=episode_log_path,
-                run_metadata=md,
-            )
+        # Build one env factory per Unity port. env_idx goes into run_metadata so
+        # JSONL lines from parallel envs are distinguishable (episode_idx is
+        # per-env when n_envs>1).
+        def make_env_factory(port, env_idx):
+            wc = world_config
+            md = {**stage_run_metadata, "env_idx": env_idx}
+            tc = task_config
 
-        env = make_vec_env(make_env, n_envs=1)
+            def _make():
+                env = WildfireGymEnv(
+                    worldgen_config=wc,
+                    agent_config=agent_config,
+                    sensor_config={},
+                    action_config={"control_mode": "velocity"},
+                    task_config=tc,
+                    metaworldgen_config={"world_generation_metaseed": metaseed + env_idx},
+                    episode_log_path=episode_log_path,
+                    run_metadata=md,
+                    unity_port=port,
+                )
+                # SB3's Monitor wrapper exposes ep_rew_mean / ep_len_mean to
+                # tensorboard under rollout/. make_vec_env applied this
+                # automatically; we have to do it explicitly here.
+                return Monitor(env)
+            return _make
+
+        env_fns = [make_env_factory(p, i) for i, p in enumerate(unity_ports)]
+        VecEnvCls = SubprocVecEnv if n_envs > 1 else DummyVecEnv
+        env = VecEnvCls(env_fns)
 
         is_stage_transition = model is not None
         reset_on_stage = rundef.get("reset_on_stage_change", False)

@@ -43,7 +43,7 @@ All methods produce the same JSONL schema, one JSON object per episode:
 {"method": "ppo", "rundef": "...", "stage_idx": 0, "seed": 42, "episode_idx": 1, "steps": 300, "total_score": 15.0, "objects_found": 3, "collisions": 1, "termination_reason": "max_steps", "distance_traveled": 450.2, "wall_time_s": 12.3}
 ```
 
-- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices.
+- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices. With `n_envs>1`, all parallel envs append to the same JSONL: each line carries an `env_idx` field so you can group/dedupe per-env, and `episode_idx` is per-env (i.e. unique within an `env_idx` but not globally).
 - **Evaluation**: `results/<run_name>/eval_episodes.jsonl` — written by `test.py` via `make_episode_result()`.
 - **DONE marker**: `results/<run_name>/DONE` (empty file) is touched at the end of a successful run. `analyze_run_data.py` warns on any run dir missing it (run crashed or still in progress).
 
@@ -124,6 +124,14 @@ python test.py def=default_forest_foraging method=human rtf=1.0
 # Method config overrides
 python train.py def=default_forest_foraging method=ppo method.learning_rate=1e-4
 python train.py def=default_forest_foraging method=recurrent_ppo method_config=configs/lstm256.yaml
+
+# Vectorized training (requires RATSIM_UNITY_BIN; spawns n_envs Unity instances on 9100+)
+python train.py def=default_forest_foraging method=ppo n_envs=8
+python train_dreamerv3.py def=default_forest_foraging n_envs=2 method.jax.platform=cuda
+
+# Two parallel runs on the same box: pass non-overlapping base_port
+python train.py def=default_forest_foraging method=ppo n_envs=4 base_port=9100  # uses 9100-9103
+python train.py def=default_forest_foraging method=ppo n_envs=4 base_port=9110  # uses 9110-9113
 ```
 
 Result folders are named `<rundef>_<method>_<YYYYMMDD_HHMMSS>` (e.g., `default_forest_foraging_ppo_20260401_143022`).
@@ -142,3 +150,70 @@ Result folders are named `<rundef>_<method>_<YYYYMMDD_HHMMSS>` (e.g., `default_f
 ## Modifiers (planned)
 
 Named config overrides (e.g., `double_tree_density`, `add_walls_1000m_box`) that can be applied on top of world presets at the orchestration layer.
+
+## Unity instance management
+
+Train and test scripts get their Unity ports from
+`ratsim.unity_launcher.allocate_unity_instances(n_envs, fresh=...)`. Two tiers:
+
+- **`RATSIM_UNITY_BIN` unset**: launch Unity manually (Editor Play or
+  `start_ratsim_headless.sh`) on port 9000. Only `n_envs=1` works; the script
+  attaches to the running instance. Trying `n_envs>1` errors out with a
+  message pointing at the env var.
+- **`RATSIM_UNITY_BIN=/path/to/build`**: scripts auto-spawn Unity on demand.
+  `n_envs=1` reuses port 9000 if alive (so debug runs share your interactive
+  instance); `n_envs>1` always allocates fresh on ports 9100+. Spawned
+  instances die with the parent Python process (via `atexit`); SIGKILL or
+  power loss leaves orphans — clean them up with
+  `./scripts/stop_ratsim_headless.sh --all`.
+
+See `ratsim/CLAUDE.md` for the full launcher contract.
+
+## Vectorization vs parallel runs
+
+Two orthogonal ways to use multiple Unity instances. Don't conflate them:
+
+**Vectorization (`n_envs=N` within one run)** — one algorithm, N parallel envs.
+PPO/RecurrentPPO concatenates rollouts from all N envs into a single batch
+each update; DreamerV3 fills its replay buffer N× faster. Single shared
+policy, single optimizer. Use this to speed up *one* training run.
+
+```bash
+# One PPO run, 8 parallel envs (ports 9100–9107)
+python train.py def=default_forest_foraging method=ppo n_envs=8
+
+# One DreamerV3 run, 2 parallel envs (GPU recommended)
+python train_dreamerv3.py def=default_forest_foraging n_envs=2 method.jax.platform=cuda
+```
+
+**Parallel runs** — N independent training processes, each with its own
+policy, optimizer, results dir, and tensorboard. Use this for seed
+sweeps / hyperparam sweeps / different methods at the same time. Pass
+non-overlapping `base_port` to each run.
+
+```bash
+# Two seeds in parallel, each using 4 envs
+python train.py def=default_forest_foraging method=ppo n_envs=4 \
+    base_port=9100 metaseed=1 name=ppo_seed1 > logs/run1.log 2>&1 &
+python train.py def=default_forest_foraging method=ppo n_envs=4 \
+    base_port=9110 metaseed=2 name=ppo_seed2 > logs/run2.log 2>&1 &
+```
+
+The 10-port gap is just a convention; what matters is the ranges don't
+overlap (run A: 9100–9103, run B: 9110–9113). Sanity-check RAM first:
+each Unity instance is ~500 MB, so 2 runs × 4 envs ≈ 4 GB just for Unity.
+
+## Headless display lifecycle
+
+`setup_headless_display.sh` installs `xorg-ratsim.service` (Xorg on `:99`),
+which auto-starts on boot. To stop or disable it:
+
+```bash
+sudo systemctl stop xorg-ratsim          # stop now
+sudo systemctl disable xorg-ratsim       # don't auto-start on boot
+sudo systemctl enable --now xorg-ratsim  # re-enable later
+```
+
+Idle Xorg costs ~20–50 MB RAM and near-zero CPU, so leaving it running is
+also fine. Re-run `setup_headless_display.sh` only after NVIDIA driver
+changes (the script caches its config path on first run).
