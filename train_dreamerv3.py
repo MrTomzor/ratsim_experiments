@@ -177,12 +177,18 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
     config = config.update(raw[size])
 
     # Defaults appropriate for ratsim + CPU.
+    # replay.size: dreamerv3 default is 5e6, sized for Atari with small obs.
+    # ratsim stores the full RSSM state (`dyn/deter` 512 + `dyn/stoch` 32x4)
+    # alongside each step in replay, so per-step cost is ~3 KB and a 5M buffer
+    # OOMs the cloud box at ~3.3M filled steps. 1M is plenty for runs of this
+    # scale and keeps the in-memory replay around 5-10 GB.
     config = config.update({
         "logdir": str(logdir),
         "task": "ratsim_wildfire",  # cosmetic; we bypass the suite switch in main.py
         "batch_size": 8,
         "batch_length": 32,
         "report_length": 32,
+        "replay.size": 1_000_000,
         "run.envs": int(n_envs),
         "run.eval_envs": 0,
         "run.steps": int(total_steps),
