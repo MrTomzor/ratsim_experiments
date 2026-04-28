@@ -1,13 +1,17 @@
-# Default machine config — CPU only.
+# Default machine config — CPU only, 1 env per process.
 #
 # Used when no --machine flag is given and $RATSIM_SCHEDULER_MACHINE is unset.
-# Adjust cpu_slot to control how many PPO subprocesses run in parallel here.
+# Adjust cpu_slot to control how many subprocesses run in parallel here.
+#
+# n_envs defaults to 1 for every method (omitted = single-env training).
+# Bump it per-method on a beefier box (see gpu_example.yaml) and remember
+# to bump `needs.cpu_slot` to match — the scheduler doesn't auto-derive.
 #
 # To use a different config (e.g. on a GPU box):
-#   python -m scheduler.scheduler run <batch> --machine gpu_example
+#   python scheduler_run.py <exp> --machine gpu_example
 #   # or
 #   export RATSIM_SCHEDULER_MACHINE=gpu_example     # also accepts a full path
-#   python -m scheduler.scheduler run <batch>
+#   python scheduler_run.py <exp>
 
 resources:
   cpu_slot: 2

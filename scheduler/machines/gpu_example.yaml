@@ -1,12 +1,18 @@
 # GPU-box machine config — one GPU, multiple cores.
 #
 # Activate via:
-#   python -m scheduler.scheduler run <batch> --machine gpu_example
+#   python scheduler_run.py <exp> --machine gpu_example
 # or via shell:
 #   export RATSIM_SCHEDULER_MACHINE=gpu_example
 #
 # recurrent_ppo and dreamer both contend for the single gpu slot, so at most
 # one of them runs at a time. Plain PPO can still run alongside the GPU job.
+#
+# n_envs is set per method here (not in the experiment def) since "how many
+# parallel envs make sense" depends on the box, not the experiment. Conservative
+# default: 1 env everywhere. Bump per method (and `needs` in lockstep) once
+# you've benchmarked — for ratsim Unity is the bottleneck for n_envs=1, so
+# vectorization can be a big win on PPO. Each Unity env is ~one cpu_slot.
 
 resources:
   gpu: 1
@@ -16,17 +22,28 @@ method_profiles:
   ppo:
     needs:
       cpu_slot: 1
+    n_envs: 1
     args:
       method.device: cpu
 
   recurrent_ppo:
     needs:
       gpu: 1
+      cpu_slot: 1
+    n_envs: 1
     args:
       method.device: cuda
 
   dreamer:
     needs:
       gpu: 1
+      cpu_slot: 1
+    n_envs: 1
+    # Dreamer has a known unfixed memory leak (~6-8 KB/env-step in the train
+    # process). On a 54 GB box this hit OOM after ~14 hours of training.
+    # SIGTERM at 30 GB lets the scheduler resume from the last periodic
+    # checkpoint (~10 min of progress lost per kill — cheap insurance).
+    # See /home/tom/dreamer_crash_summary.md for context.
+    max_ram_gb: 30
     args:
       method.jax.platform: cuda

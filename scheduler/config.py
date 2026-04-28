@@ -61,11 +61,13 @@ DEFAULT_TRAIN_SCRIPT = {
 SCRIPTS_NEEDING_METHOD_ARG = {"train.py"}
 
 # CLI keys the scheduler controls — user method args / common args may not
-# override these (would silently break dispatch).
+# override these (would silently break dispatch). `n_envs` is sourced from the
+# machine profile (see MethodProfile.n_envs), since vectorization is a
+# machine-capacity concern, not an experiment one.
 RESERVED_ARGS = {
     "def", "variation", "run_folder", "name",
     "start_stage", "end_stage", "step_multiplier",
-    "metaseed", "base_port", "method",
+    "metaseed", "base_port", "method", "n_envs",
 }
 
 
@@ -87,9 +89,22 @@ __all__ = [
 
 @dataclass
 class MethodProfile:
-    """A method's machine-specific resource requirements + arg overrides."""
+    """A method's machine-specific resource requirements + arg overrides.
+
+    n_envs vectorization sits here (not on the experiment def) because it's a
+    "what does this box have capacity for" question, not "what's the
+    experiment about" question. Defaults to 1 — bump it (along with `needs`)
+    on machines with spare cores.
+
+    max_ram_gb is an optional safety net: if the process-tree RSS exceeds it,
+    the scheduler SIGTERMs the job and re-dispatches it (relying on per-stage
+    .done markers + the method's internal checkpointing for resume). RAM-kills
+    don't count toward the consecutive-failure budget. Useful for dreamer,
+    which has a known but unfixed memory leak."""
     needs: dict[str, int] = field(default_factory=dict)
     args: dict = field(default_factory=dict)
+    n_envs: int = 1
+    max_ram_gb: float | None = None
     python_env: str | None = None
     train_script: str | None = None
 
@@ -120,9 +135,12 @@ def load_machine_config(machine_dir: Path, override: str | None = None) -> Machi
         raw = yaml.safe_load(f) or {}
     profiles = {}
     for name, profile in (raw.get("method_profiles") or {}).items():
+        max_ram = profile.get("max_ram_gb")
         profiles[name] = MethodProfile(
             needs=dict(profile.get("needs") or {}),
             args=dict(profile.get("args") or {}),
+            n_envs=int(profile.get("n_envs", 1)),
+            max_ram_gb=float(max_ram) if max_ram is not None else None,
             python_env=profile.get("python_env"),
             train_script=profile.get("train_script"),
         )
@@ -154,7 +172,7 @@ def resolve_train_script(method: MethodSpec, profile: MethodProfile) -> str:
 
 def validate_against_machine(exp: ExperimentDef, machine: MachineConfig) -> None:
     """Fail fast on misconfigurations: missing profile, impossible needs,
-    unset python env vars."""
+    unset python env vars, n_envs > port window."""
     for method in exp.methods:
         if method.name not in machine.method_profiles:
             raise ValueError(
@@ -170,4 +188,15 @@ def validate_against_machine(exp: ExperimentDef, machine: MachineConfig) -> None
                 raise ValueError(
                     f"method '{method.name}' needs {k}={v} but capacity is "
                     f"{machine.resources[k]} — would never dispatch.")
+        if profile.n_envs < 1:
+            raise ValueError(
+                f"method '{method.name}': n_envs must be ≥ 1, got {profile.n_envs}")
+        if profile.n_envs > 10:
+            # Each dispatched job gets a 10-wide unity port window
+            # (PortAllocator window_size=10). n_envs > 10 would overflow into
+            # the next job's window.
+            raise ValueError(
+                f"method '{method.name}': n_envs={profile.n_envs} exceeds the "
+                f"per-job port window of 10. Bump PortAllocator.window_size "
+                f"in scheduler.py or reduce n_envs.")
         resolve_python(method, profile)

@@ -34,11 +34,18 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import yaml
+
+# psutil is a soft dep — only needed if some profile sets max_ram_gb. We
+# warn at startup if it's set but the import failed.
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from . import config as cfg
 from . import runs as runs_mod
@@ -88,6 +95,10 @@ class ActiveJob:
     profile: cfg.MethodProfile
     started_at: datetime
     log_path: Path
+    # Set when the scheduler kills the job for exceeding max_ram_gb. Reaping
+    # logic uses this to skip the consecutive-failure increment so dreamer-
+    # style runs that need many restarts don't get blocked.
+    ram_killed: bool = False
 
 
 class ResourceManager:
@@ -207,6 +218,27 @@ def tail_log(log_path: Path, n_lines: int) -> str:
         return "\n".join(lines[-n_lines:])
     except OSError:
         return ""
+
+
+def _process_tree_rss_gb(pid: int) -> float | None:
+    """Return RSS of the process + all descendants in GB, or None if psutil
+    isn't available or the process is gone. Used by the RAM watchdog.
+
+    Counting descendants matters because train.py spawns Unity child
+    instances; we want to attribute their RSS to the train process group."""
+    if psutil is None:
+        return None
+    try:
+        proc = psutil.Process(pid)
+        rss = proc.memory_info().rss
+        for child in proc.children(recursive=True):
+            try:
+                rss += child.memory_info().rss
+            except psutil.NoSuchProcess:
+                pass
+        return rss / (1024 ** 3)
+    except psutil.NoSuchProcess:
+        return None
 
 
 def kill_orphans(state: dict) -> None:
@@ -460,6 +492,7 @@ def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
         f"step_multiplier={step_multiplier}",
         f"metaseed={run.seed}",
         f"base_port={port_base}",
+        f"n_envs={profile.n_envs}",
     ]
     if train_script in cfg.SCRIPTS_NEEDING_METHOD_ARG:
         cmd.append(f"method={run.method.name}")
@@ -488,7 +521,8 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"stage_{stage_idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
-    print(f"[scheduler] dispatch {run.run_id} stage {stage_idx} port={port_base}")
+    print(f"[scheduler] dispatch {run.run_id} stage {stage_idx} "
+          f"port={port_base} n_envs={profile.n_envs}")
     print(f"[scheduler]   log: {log_path}")
     print(f"[scheduler]   cmd: {' '.join(cmd)}")
 
@@ -554,6 +588,14 @@ def cmd_run(args):
     print(f"[scheduler] machine_config={machine.source} "
           f"resources={machine.resources}")
 
+    # Warn if any profile sets max_ram_gb but psutil isn't installed —
+    # the watchdog will silently no-op otherwise.
+    has_ram_limits = any(p.max_ram_gb is not None for p in machine.method_profiles.values())
+    if has_ram_limits and psutil is None:
+        print("[scheduler] WARNING: a method profile sets max_ram_gb but "
+              "psutil is not importable — RAM watchdog will be inactive. "
+              "`pip install psutil` in the SB3 venv to enable.")
+
     kill_orphans(state)
     state["running"] = []
     save_state(state_path, state)
@@ -599,6 +641,28 @@ def cmd_run(args):
     signal.signal(signal.SIGTERM, handle_signal)
 
     while True:
+        # ---- RAM watchdog: SIGTERM jobs that exceed max_ram_gb ----
+        # The kill is recorded on the ActiveJob so the reaping path below
+        # knows not to count it toward the consecutive-failure budget. We
+        # only act once per job — once SIGTERM is sent, ram_killed is True
+        # and the next iteration just waits for the process to exit.
+        for job in active:
+            if job.ram_killed or job.profile.max_ram_gb is None:
+                continue
+            rss_gb = _process_tree_rss_gb(job.popen.pid)
+            if rss_gb is None:
+                continue
+            if rss_gb > job.profile.max_ram_gb:
+                print(f"[scheduler] {job.run.run_id} stage {job.stage_idx} "
+                      f"RAM={rss_gb:.1f}GB exceeds limit "
+                      f"{job.profile.max_ram_gb:.1f}GB — SIGTERM (will resume "
+                      f"from last in-stage checkpoint).")
+                job.ram_killed = True
+                try:
+                    os.killpg(job.popen.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
         # ---- Reap finished jobs ----
         for job in list(active):
             rc = job.popen.poll()
@@ -608,7 +672,10 @@ def cmd_run(args):
             port_alloc.release(job.port_base)
             active.remove(job)
             duration = (datetime.now() - job.started_at).total_seconds()
-            outcome = "done" if rc == 0 else f"FAILED (exit {rc})"
+            if job.ram_killed:
+                outcome = f"RAM-killed (exit {rc})"
+            else:
+                outcome = "done" if rc == 0 else f"FAILED (exit {rc})"
             stage_done = runs_mod.stage_done(job.run.run_dir, job.stage_idx)
             print(f"[scheduler] {job.run.run_id} stage {job.stage_idx} "
                   f"{outcome} in {duration:.0f}s (stage_done={stage_done})")
@@ -617,7 +684,8 @@ def cmd_run(args):
                 if not (e["run_id"] == job.run.run_id
                         and e["stage_idx"] == job.stage_idx)
             ]
-            if rc != 0:
+            if rc != 0 and not job.ram_killed:
+                # Real failure: log + tail + bump the retry counter.
                 state["failed"].append({
                     "run_id": job.run.run_id,
                     "stage_idx": job.stage_idx,
@@ -625,8 +693,6 @@ def cmd_run(args):
                     "log_path": str(job.log_path),
                     "at": datetime.now().isoformat(timespec="seconds"),
                 })
-                # Echo the tail of the child's log to the scheduler's stdout
-                # so the user sees the error without opening the log file.
                 tail = tail_log(job.log_path, ERROR_TAIL_LINES)
                 if tail:
                     print(f"[scheduler]   --- last {ERROR_TAIL_LINES} log "
@@ -643,6 +709,14 @@ def cmd_run(args):
                           f"consecutive failures. Fix the issue (see tail "
                           f"above; full log at {job.log_path}) then re-run "
                           f"the scheduler to retry.")
+            elif rc != 0 and job.ram_killed:
+                # RAM-kill: also reset any prior consecutive-failure count
+                # for this stage, since the process was healthy from the
+                # scheduler's POV — we just told it to stop. Otherwise a
+                # stage that got 1 real failure followed by N RAM-kills
+                # could still hit the block threshold.
+                consecutive_failures.pop(
+                    (job.run.run_id, job.stage_idx), None)
             save_state(state_path, state)
 
         # ---- Drain mode: shutdown requested → don't spawn anything new ----

@@ -212,6 +212,71 @@ the box runs up to 4 PPOs in parallel and at most one of {recurrent_ppo,
 dreamer}, plus PPOs alongside that GPU job. To restrict more aggressively
 on a smaller box, lower `cpu_slot` capacity.
 
+## RAM watchdog (max_ram_gb)
+
+Each method profile can set an optional `max_ram_gb`. If the dispatched
+process's *process tree* RSS (the train process + all descendants, including
+Unity envs) exceeds this, the scheduler SIGTERMs the job and re-dispatches
+it. The job's last in-stage checkpoint is what gets resumed from — for
+dreamer that's `dreamer_logdir/ckpt/latest`, written periodically by
+embodied (~every 10 min by default), so at most that much progress is lost
+per kill.
+
+```yaml
+method_profiles:
+  dreamer:
+    needs: {gpu: 1, cpu_slot: 1}
+    n_envs: 1
+    max_ram_gb: 30      # ← SIGTERM if RSS exceeds 30 GB
+```
+
+**RAM-kills don't count toward `MAX_CONSECUTIVE_FAILURES`.** Otherwise dreamer
+(which has a known leak — see `/home/tom/dreamer_crash_summary.md`) would get
+blocked after 2 OOMs in a long stage. A real crash (segfault, traceback,
+non-RAM-kill nonzero exit) still counts normally. RAM-kills also reset any
+prior failure counter for that stage.
+
+`psutil` is a soft dep — if a profile sets `max_ram_gb` but psutil isn't
+importable, the watchdog stays inactive and a warning is printed at
+startup. `pip install psutil` in the SB3 venv to enable.
+
+The default machine config doesn't set `max_ram_gb` anywhere; only
+`gpu_example.yaml` enables it for dreamer.
+
+## Vectorization (n_envs)
+
+Each method profile also declares `n_envs:` (default 1) — the number of
+parallel Unity envs each dispatched job spawns. Lives on the *machine*
+profile, not the experiment def, because "how many envs make sense"
+depends on the box (cores, RAM, GPU), not the experiment. The scheduler
+passes `n_envs=<N>` to train.py at dispatch time.
+
+```yaml
+method_profiles:
+  ppo:
+    needs: {cpu_slot: 4}      # ← bump in lockstep with n_envs
+    n_envs: 4
+  dreamer:
+    needs: {gpu: 1, cpu_slot: 2}
+    n_envs: 2
+```
+
+**`needs` does not auto-track `n_envs`** — you have to bump them together.
+Each Unity env is roughly one `cpu_slot` of CPU work for the sim side, plus
+the policy/learning compute. If you set `n_envs: 4` but leave
+`needs: {cpu_slot: 1}`, the scheduler will run multiple of these in
+parallel and oversubscribe the box.
+
+`n_envs` is in `RESERVED_ARGS` — putting it in `args:` of the profile or in
+def-level `common_args:` is ignored with a warning. The machine profile is
+the only place to set it for scheduler-driven runs.
+
+**Hard cap**: `n_envs ≤ 10` per job (each dispatch gets a 10-wide Unity
+port window starting at `base_port`). Validation catches this at startup.
+
+For inline ad-hoc training (`python train.py method=ppo ... n_envs=8`),
+just pass `n_envs=N` on the CLI — the train scripts default it to 1.
+
 ## Unity ports
 
 Every dispatch gets a fresh non-overlapping port window starting at 9100,
