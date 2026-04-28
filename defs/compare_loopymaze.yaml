@@ -10,12 +10,12 @@ agent_preset: sphereagent_2d_lidar
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: maze_default
 
-total_steps: 10_000_000
+total_steps: 3_000_000
 n_stages: 10
 mode: bfs
 
 methods:
   - name: ppo
-  - name: dreamer
+  # - name: dreamer
 
-seeds: 3
+seeds: 10

@@ -18,7 +18,7 @@ methods:
   - name: ppo
   # - name: dreamer
 
-seeds: 3
+seeds: 5
 
 variations:
   - name: with_gps
