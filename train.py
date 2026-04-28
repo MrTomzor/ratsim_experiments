@@ -1,20 +1,28 @@
 """
-Train an RL agent on an experiment def.
+Train an RL agent.
 
-Usage:
+Two ways to specify what to train on:
+
+1. Saved experiment def (use this for anything you'll re-run / share):
     python train.py def=method_compare method=ppo
     python train.py def=method_compare method=ppo variation=baseline
     python train.py def=gps_ablation method=dreamer variation=no_gps
-    python train.py def=method_compare method=ppo run_folder=my_run step_multiplier=2.0
-    python train.py def=method_compare method=ppo metaseed=42
+    python train.py def=method_compare method=ppo run_folder=my_run
+
+2. Inline (no def file — give the same fields on the CLI):
+    python train.py method=ppo agent_preset=sphereagent_2d_lidar \\
+                    task_preset=default world_preset=maze_default \\
+                    total_steps=1_000_000 n_stages=10
+    # Minimal: defaults agent_preset=sphereagent_2d_lidar, task_preset=default,
+    # n_stages=1. world_preset is required.
+    python train.py method=ppo world_preset=maze_default total_steps=100_000
 
 Resuming an existing run (e.g. from the scheduler):
-    # run only stage 3 of an existing run, loading from stage_2.zip
     python train.py def=... method=ppo run_folder=my_run start_stage=3 end_stage=4
 
 `def=` accepts either a bare name (looked up in defs/) or a path to a yaml.
 `variation=` defaults to "baseline" — every experiment has at least that one
-implicitly.
+implicitly. `metaseed=N` controls the world-generation seed (random by default).
 """
 
 import argparse
@@ -41,6 +49,7 @@ from experiment_defs import (
     ExperimentDef,
     StageSpec,
     VariationSpec,
+    build_inline_def,
     find_variation,
     load_experiment_def,
     resolve_agent_preset,
@@ -277,22 +286,29 @@ def main():
     args = parse_args()
     overrides = parse_overrides(args.overrides)
 
-    # Required: experiment def. Optional: variation, method, run_folder, ...
+    # `def=` is optional — without it, train.py runs in inline mode and
+    # builds a single-method, single-variation experiment from the CLI args.
     def_arg = overrides.pop("def", None)
     method_name = overrides.pop("method", "ppo")
-    if def_arg is None:
-        print("Usage: python train.py def=<exp_id_or_path> [variation=<name>] "
-              "method=<method_name> [overrides...]")
-        sys.exit(1)
     variation_name = overrides.pop("variation", "baseline")
 
-    def_path = resolve_def_path(DEFS_DIR, def_arg)
-    if not def_path.exists():
-        available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
-        print(f"[train] ERROR: experiment def not found at {def_path}\n"
-              f"        Available in {DEFS_DIR}: {available}")
-        sys.exit(1)
-    exp = load_experiment_def(def_path)
+    if def_arg is not None:
+        def_path = resolve_def_path(DEFS_DIR, def_arg)
+        if not def_path.exists():
+            available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
+            print(f"[train] ERROR: experiment def not found at {def_path}\n"
+                  f"        Available in {DEFS_DIR}: {available}")
+            sys.exit(1)
+        exp = load_experiment_def(def_path)
+    else:
+        # Inline mode — pop the experiment-shaping keys from overrides.
+        try:
+            exp = build_inline_def(method_name, overrides)
+        except ValueError as e:
+            print(f"[train] ERROR (inline def): {e}\n"
+                  f"        Required: method=, world_preset=, total_steps=. "
+                  f"Optional: agent_preset=, task_preset=, n_stages= (default 1).")
+            sys.exit(1)
     variation = find_variation(exp, variation_name)
 
     # `run_folder` is canonical; `name=` is a deprecated alias.

@@ -109,6 +109,25 @@ variations:
       - volex_zero_overlay
 ```
 
+### Skipping the def for ad-hoc runs
+
+The scheduler always loads from `defs/*.yaml`, but `train.py` (and
+`train_dreamerv3.py`) accept the same fields inline on the CLI when you don't
+want to save a file:
+
+```bash
+python train.py method=ppo world_preset=maze_default total_steps=100_000
+python train.py method=ppo agent_preset=sphereagent_2d_lidar \
+    task_preset=volumetric_exploration_2000_collision_penalty \
+    world_preset=maze_default total_steps=1_000_000 n_stages=10 metaseed=42
+python train_dreamerv3.py world_preset=maze_default total_steps=500_000 n_stages=5
+```
+
+Defaults for inline mode: `agent_preset=sphereagent_2d_lidar`,
+`task_preset=default`, `n_stages=1`. `world_preset` and `total_steps` are
+required. For curricula or variation sweeps, write a def — that's exactly
+the case where saving the file pays off.
+
 ### Override resolution
 
 Per (variation, stage), resolved at dispatch time:

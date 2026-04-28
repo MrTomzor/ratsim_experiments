@@ -225,6 +225,155 @@ def kill_orphans(state: dict) -> None:
             print(f"[scheduler] could not kill orphan pid {pid}: {e}")
 
 
+def _read_jsonl_episode_records(jsonl_path: Path) -> list[dict]:
+    """Return per-episode records from a train_episodes.jsonl file.
+
+    Each entry has stage_idx, steps, wall_time_s, total_score, objects_found.
+    Skips empty lines and the final line if it's mid-write (incomplete JSON)
+    — the env writes line by line so the tail is always either complete or
+    a single half-written record at most. Lines missing any of the required
+    fields are skipped."""
+    out: list[dict] = []
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ep = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ("stage_idx" not in ep or "steps" not in ep
+                        or "wall_time_s" not in ep):
+                    continue
+                out.append({
+                    "stage_idx": int(ep["stage_idx"]),
+                    "steps": int(ep["steps"]),
+                    "wall_time_s": float(ep["wall_time_s"]),
+                    "total_score": float(ep.get("total_score", 0.0)),
+                    "objects_found": float(ep.get("objects_found", 0.0)),
+                })
+    except OSError:
+        return []
+    return out
+
+
+def aggregate_fps_by_method(runs: list[Run], recent_window: int = 50) -> dict[str, dict]:
+    """For each method, sum steps and wall_time across all runs (cumulative)
+    and across the last `recent_window` episodes (recent). Returns
+    {method: {steps, wall_time_s, fps, n_episodes, n_runs,
+              recent_fps, recent_steps, recent_wall_s}}."""
+    cumulative: dict[str, dict] = {}
+    # Recent window pools the tail of each run's jsonl. Mixing tails across
+    # runs of the same method is an approximation but cheap and representative
+    # for "what's the typical recent throughput".
+    per_method_recent_pool: dict[str, list[tuple[int, float]]] = {}
+    for run in runs:
+        records = _read_jsonl_episode_records(run.run_dir / "train_episodes.jsonl")
+        if not records:
+            continue
+        method = run.method.name
+        d = cumulative.setdefault(method, {
+            "steps": 0, "wall_time_s": 0.0, "n_episodes": 0,
+            "n_runs": set(),
+        })
+        for r in records:
+            d["steps"] += r["steps"]
+            d["wall_time_s"] += r["wall_time_s"]
+            d["n_episodes"] += 1
+            d["n_runs"].add(run.run_id)
+        for r in records[-recent_window:]:
+            per_method_recent_pool.setdefault(method, []).append(
+                (r["steps"], r["wall_time_s"]))
+
+    out: dict[str, dict] = {}
+    for method, d in cumulative.items():
+        if d["wall_time_s"] <= 0:
+            continue
+        recent = per_method_recent_pool.get(method, [])[-recent_window:]
+        recent_steps = sum(s for s, _ in recent)
+        recent_wall = sum(w for _, w in recent)
+        out[method] = {
+            "steps": d["steps"],
+            "wall_time_s": d["wall_time_s"],
+            "fps": d["steps"] / d["wall_time_s"],
+            "n_episodes": d["n_episodes"],
+            "n_runs": len(d["n_runs"]),
+            "recent_fps": (recent_steps / recent_wall) if recent_wall > 0 else None,
+            "recent_steps": recent_steps,
+            "recent_wall_s": recent_wall,
+            "recent_n": len(recent),
+        }
+    return out
+
+
+def aggregate_perf_by_stage(runs: list[Run], recent_window: int = 50
+                            ) -> dict[tuple[str, str, int], dict]:
+    """Per (variation, method, stage_idx): mean total_score and objects_found
+    over the last `recent_window` episodes within that stage, averaged across
+    seeds (mean of per-run means — equal weight per seed regardless of
+    episode count). Returns {(variation, method, stage_idx):
+    {reward_mean, pickups_mean, n_seeds}}."""
+    # First pass: per-run, per-stage means over the last N within each stage.
+    per_run_stage: dict[str, dict[int, tuple[float, float]]] = {}
+    run_meta = {r.run_id: (r.variation.name, r.method.name) for r in runs}
+
+    for run in runs:
+        records = _read_jsonl_episode_records(run.run_dir / "train_episodes.jsonl")
+        if not records:
+            continue
+        # Bucket by stage_idx, then take the last N within each stage.
+        by_stage: dict[int, list[dict]] = {}
+        for r in records:
+            by_stage.setdefault(r["stage_idx"], []).append(r)
+        per_run_stage[run.run_id] = {}
+        for s_idx, eps in by_stage.items():
+            tail = eps[-recent_window:]
+            if not tail:
+                continue
+            reward_mean = sum(r["total_score"] for r in tail) / len(tail)
+            pickups_mean = sum(r["objects_found"] for r in tail) / len(tail)
+            per_run_stage[run.run_id][s_idx] = (reward_mean, pickups_mean)
+
+    # Second pass: aggregate by (variation, method, stage_idx).
+    bucket: dict[tuple[str, str, int], list[tuple[float, float]]] = {}
+    for run_id, stage_data in per_run_stage.items():
+        var, method = run_meta[run_id]
+        for s_idx, (rm, pm) in stage_data.items():
+            bucket.setdefault((var, method, s_idx), []).append((rm, pm))
+
+    out: dict[tuple[str, str, int], dict] = {}
+    for key, pairs in bucket.items():
+        rms = [p[0] for p in pairs]
+        pms = [p[1] for p in pairs]
+        out[key] = {
+            "reward_mean": sum(rms) / len(rms),
+            "pickups_mean": sum(pms) / len(pms),
+            "n_seeds": len(pairs),
+        }
+    return out
+
+
+def _format_elapsed(secs: float) -> str:
+    s = int(secs)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    h = s // 3600
+    return f"{h}h{(s % 3600) // 60:02d}m"
+
+
+def _format_si(n: int) -> str:
+    """Compact SI: 1500 → '1.5k', 100000 → '100k', 10_000_000 → '10M'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:g}M"
+    if n >= 1_000:
+        return f"{n / 1_000:g}k"
+    return str(int(n))
+
+
 def expand_runs(exp: cfg.ExperimentDef, exp_results_dir: Path) -> list[Run]:
     """One Run per (variation, method, seed) triple."""
     out = []
@@ -594,14 +743,93 @@ def cmd_status(args):
                   f"pid={e['pid']} ({alive})  port={e.get('port_base')}  "
                   f"started={e.get('started_at')}")
 
+    compact = bool(getattr(args, "compact", False))
+
     failed = state.get("failed", [])
     if failed:
-        print(f"\nFailed (last {min(10, len(failed))} of {len(failed)}):")
-        for e in failed[-10:]:
-            print(f"  {e['run_id']} stage {e['stage_idx']}  "
-                  f"exit={e['exit_code']}  at={e['at']}")
-            if e.get("log_path"):
-                print(f"    log: {e['log_path']}")
+        if compact:
+            # Watch / compact mode: just count, the full list pollutes the
+            # screen on every refresh. One-shot status (without --watch / --compact)
+            # still shows the last 10 with log paths so you can scroll.
+            print(f"\nFailed: {len(failed)} attempts so far. "
+                  f"Re-run `python scheduler_status.py {args.exp}` "
+                  f"(no --watch) to see the list.")
+        else:
+            print(f"\nFailed (last {min(10, len(failed))} of {len(failed)}):")
+            for e in failed[-10:]:
+                print(f"  {e['run_id']} stage {e['stage_idx']}  "
+                      f"exit={e['exit_code']}  at={e['at']}")
+                if e.get("log_path"):
+                    print(f"    log: {e['log_path']}")
+
+    # FPS by method — cumulative across the whole experiment so far, plus a
+    # rolling "recent" window of the last 50 episodes per method. Recent FPS
+    # catches slowdowns; cumulative gives the bulk throughput. Both are
+    # env-step rates (sim throughput), not policy-update rates.
+    fps_stats = aggregate_fps_by_method(runs)
+    if fps_stats:
+        print(f"\nFPS by method  (env-step rate from train_episodes.jsonl):")
+        longest = max(len(m) for m in fps_stats)
+        print(f"  {'method':<{longest}}  {'cumul fps':>9}  "
+              f"{'recent fps':>10}  {'total steps':>12}  {'elapsed':>9}  "
+              f"{'eps':>6}  runs")
+        for m in sorted(fps_stats):
+            d = fps_stats[m]
+            recent = (f"{d['recent_fps']:.1f}" if d['recent_fps'] is not None
+                      else "  —  ")
+            print(f"  {m:<{longest}}  {d['fps']:>9.1f}  "
+                  f"{recent:>10}  {d['steps']:>12,}  "
+                  f"{_format_elapsed(d['wall_time_s']):>9}  "
+                  f"{d['n_episodes']:>6}  {d['n_runs']}")
+        print(f"  (recent fps = mean over last ~50 episodes per method)")
+
+    # Per-stage performance tables: reward + pickups, columns = stages, rows
+    # = (variation, method). Each cell is "mean (n_seeds)". Only stages where
+    # at least one seed has data are shown.
+    perf = aggregate_perf_by_stage(runs)
+    if perf:
+        single_var = len(exp.variations) == 1
+        # Cumulative end-step per stage (uses def's step_multiplier — if you
+        # ran with --step-multiplier the labels won't reflect that, but the
+        # stage idx still does, which is the part that matters).
+        cumulative = []
+        cum = 0
+        for stage in exp.stages:
+            cum += int(stage.steps * exp.step_multiplier)
+            cumulative.append(cum)
+
+        stages_with_data = sorted({s_idx for (_, _, s_idx) in perf})
+        row_keys = sorted({(v, m) for (v, m, _) in perf})
+
+        def _row_label(v, m):
+            return m if single_var else f"{v}/{m}"
+
+        label_w = max(len(_row_label(v, m)) for v, m in row_keys)
+        col_w = 11   # fits "12.34 (10)" + a bit
+
+        def _print_table(title, value_key):
+            print(f"\n=== {title} — mean of last ~50 eps per stage, averaged over seeds ===")
+            line1 = " " * (label_w + 2)
+            line2 = " " * (label_w + 2)
+            for s_idx in stages_with_data:
+                line1 += f"  {('s' + str(s_idx)):<{col_w}}"
+                line2 += f"  {('@' + _format_si(cumulative[s_idx])):<{col_w}}"
+            print(line1)
+            print(line2)
+            for v, m in row_keys:
+                row = f"  {_row_label(v, m):<{label_w}}"
+                for s_idx in stages_with_data:
+                    key = (v, m, s_idx)
+                    if key in perf:
+                        d = perf[key]
+                        cell = f"{d[value_key]:.2f} ({d['n_seeds']})"
+                    else:
+                        cell = "—"
+                    row += f"  {cell:<{col_w}}"
+                print(row)
+
+        _print_table("Reward", "reward_mean")
+        _print_table("Pickups", "pickups_mean")
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +860,9 @@ def main():
 
     p_st = sub.add_parser("status", help="Show experiment status")
     p_st.add_argument("exp", help="Experiment id or path to a def yaml")
+    p_st.add_argument(
+        "--compact", action="store_true",
+        help="Hide the failed-runs list.")
     p_st.set_defaults(func=cmd_status)
 
     args = parser.parse_args()

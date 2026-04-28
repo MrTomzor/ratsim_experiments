@@ -1,12 +1,16 @@
-"""Train DreamerV3 on an experiment def.
+"""Train DreamerV3.
 
 Mirrors the CLI of train.py for parity with the SB3 methods:
 
+    # With a saved experiment def:
     python train_dreamerv3.py def=method_compare
     python train_dreamerv3.py def=method_compare variation=baseline
     python train_dreamerv3.py def=method_compare run_folder=my_run metaseed=42
     python train_dreamerv3.py def=method_compare size=size12m step_multiplier=2.0
     python train_dreamerv3.py def=method_compare method.batch_size=8
+
+    # Inline (no def file):
+    python train_dreamerv3.py world_preset=maze_default total_steps=1_000_000
 
 Resuming an existing run (e.g. from the scheduler):
     python train_dreamerv3.py def=... run_folder=my_run start_stage=3 end_stage=4
@@ -49,6 +53,7 @@ from experiment_defs import (
     ExperimentDef,
     StageSpec,
     VariationSpec,
+    build_inline_def,
     find_variation,
     load_experiment_def,
     resolve_agent_preset,
@@ -213,19 +218,25 @@ def main():
     overrides = parse_overrides(args.overrides)
 
     def_arg = overrides.pop("def", None)
-    if def_arg is None:
-        print("Usage: python train_dreamerv3.py def=<exp_id_or_path> "
-              "[variation=<name>] [overrides...]")
-        sys.exit(1)
     variation_name = overrides.pop("variation", "baseline")
 
-    def_path = resolve_def_path(DEFS_DIR, def_arg)
-    if not def_path.exists():
-        available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
-        print(f"[dreamerv3] ERROR: experiment def not found at {def_path}\n"
-              f"            Available in {DEFS_DIR}: {available}")
-        sys.exit(1)
-    exp = load_experiment_def(def_path)
+    if def_arg is not None:
+        def_path = resolve_def_path(DEFS_DIR, def_arg)
+        if not def_path.exists():
+            available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
+            print(f"[dreamerv3] ERROR: experiment def not found at {def_path}\n"
+                  f"            Available in {DEFS_DIR}: {available}")
+            sys.exit(1)
+        exp = load_experiment_def(def_path)
+    else:
+        # Inline mode — single-method, single-variation, built from CLI args.
+        try:
+            exp = build_inline_def("dreamer", overrides)
+        except ValueError as e:
+            print(f"[dreamerv3] ERROR (inline def): {e}\n"
+                  f"            Required: world_preset=, total_steps=. "
+                  f"Optional: agent_preset=, task_preset=, n_stages= (default 1).")
+            sys.exit(1)
     variation = find_variation(exp, variation_name)
 
     run_folder = overrides.pop("run_folder", None)

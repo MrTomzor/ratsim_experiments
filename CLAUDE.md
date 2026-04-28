@@ -52,6 +52,10 @@ Long form: replace `total_steps:` + `n_stages:` with an explicit `stages:`
 list (one entry per stage with its own `world_preset` + `steps`). See
 `scheduler/README.md` for the full schema and the override resolution rules.
 
+For one-off training without a saved def, `train.py` accepts the same fields
+inline on the CLI — see the **Usage** section below. Defs are for things
+you'll re-run, share, or feed to the scheduler.
+
 ### Method-invariant evaluation
 
 All methods produce the same JSONL schema, one JSON object per episode:
@@ -134,22 +138,35 @@ ratsim_experiments/
 
 ## Usage
 
-The `def=` argument accepts either a name (looked up in `defs/`) or a file path (tab-completable). Use `run_folder=<name>` to control the output directory. `variation=<name>` defaults to `baseline` — every experiment has at least that one implicitly when `variations:` is omitted from the def.
+Two ways to specify what to train on: a saved experiment def (`def=<name>`), or inline CLI args (no `def=`). Both go through the same `ExperimentDef` schema internally; the inline form just builds a single-method, single-variation def from the CLI.
 
 ```bash
-# Train (by name or path)
+# --- With a saved def (lookup by name in defs/, or pass a path) ---
 python train.py def=method_compare method=ppo run_folder=my_run
 python train.py def=defs/method_compare.yaml method=ppo
 python train.py def=method_compare method=ppo step_multiplier=2.0
-
-# Train a specific variation
 python train.py def=gps_ablation method=ppo variation=no_gps
 
-# Evaluate trained model (test.py still uses the old rundef path; needs porting)
+# --- Inline (no def file — for quick ad-hoc training) ---
+# Minimal: world_preset and total_steps are required; agent / task / n_stages
+# default to sphereagent_2d_lidar / default / 1.
+python train.py method=ppo world_preset=maze_default total_steps=100_000
+
+# Full inline:
+python train.py method=ppo \
+    agent_preset=sphereagent_2d_lidar \
+    task_preset=volumetric_exploration_2000_collision_penalty \
+    world_preset=maze_default \
+    total_steps=1_000_000 n_stages=10 metaseed=42
+
+# Dreamer (inline mode infers method=dreamer):
+python train_dreamerv3.py world_preset=maze_default total_steps=500_000 n_stages=5
+
+# --- Evaluate trained model (test.py still uses the old rundef path; needs porting) ---
 python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip
 python test.py def=default_forest_foraging method=human rtf=1.0
 
-# Method config overrides
+# Method config overrides (work with both saved-def and inline)
 python train.py def=method_compare method=ppo method.learning_rate=1e-4
 python train.py def=method_compare method=recurrent_ppo method_config=configs/lstm256.yaml
 
@@ -165,7 +182,7 @@ python train.py def=method_compare method=ppo n_envs=4 base_port=9110  # 9110-91
 python -m scheduler.scheduler run method_compare
 ```
 
-Ad-hoc result folders are named `<exp_id>_<variation>_<method>_<YYYYMMDD_HHMMSS>`. Scheduler-driven runs go to `results/experiments/<exp_id>/runs/<variation>__<method>__seed<n>/`.
+Ad-hoc result folders are named `<exp_id>_<variation>_<method>_<YYYYMMDD_HHMMSS>` (inline mode uses `cli_run` as the exp_id). Scheduler-driven runs go to `results/experiments/<exp_id>/runs/<variation>__<method>__seed<n>/`.
 
 ## Seeds
 

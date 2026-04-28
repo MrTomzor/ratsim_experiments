@@ -192,28 +192,26 @@ def _validate_world_resolves(exp: ExperimentDef) -> None:
                     f"per-variation `world_preset:`, or per-stage `world_preset:`.")
 
 
-def load_experiment_def(path: Path) -> ExperimentDef:
-    path = Path(path)
-    with open(path) as f:
-        raw = yaml.safe_load(f) or {}
-
-    exp_id = path.stem
+def build_experiment_def(raw: dict, *, source: Path, exp_id: str) -> ExperimentDef:
+    """Construct an ExperimentDef from a raw dict (the same shape a def
+    YAML deserializes to). Used by both `load_experiment_def` (file → dict
+    → ExperimentDef) and inline-from-CLI builders in train.py."""
     agent_preset = as_preset_list(raw.get("agent_preset", "sphereagent_2d_lidar"))
     task_preset = as_preset_list(raw.get("task_preset", "default"))
     world_preset = as_preset_list(raw.get("world_preset"))
 
-    stages = _expand_stages(raw, world_preset, path)
+    stages = _expand_stages(raw, world_preset, source)
     default_n_seeds = int(raw.get("seeds", 1))
-    methods = _parse_methods(raw.get("methods"), default_n_seeds, path)
-    variations = _parse_variations(raw.get("variations"), path)
+    methods = _parse_methods(raw.get("methods"), default_n_seeds, source)
+    variations = _parse_variations(raw.get("variations"), source)
 
     mode = raw.get("mode", "bfs")
     if mode not in ("bfs", "dfs"):
-        raise ValueError(f"{path}: mode must be 'bfs' or 'dfs', got {mode!r}")
+        raise ValueError(f"{source}: mode must be 'bfs' or 'dfs', got {mode!r}")
 
     exp = ExperimentDef(
         exp_id=exp_id,
-        source=path,
+        source=source,
         agent_preset=agent_preset,
         task_preset=task_preset,
         world_preset=world_preset,
@@ -226,6 +224,41 @@ def load_experiment_def(path: Path) -> ExperimentDef:
     )
     _validate_world_resolves(exp)
     return exp
+
+
+def load_experiment_def(path: Path) -> ExperimentDef:
+    path = Path(path)
+    with open(path) as f:
+        raw = yaml.safe_load(f) or {}
+    return build_experiment_def(raw, source=path, exp_id=path.stem)
+
+
+def build_inline_def(method_name: str, overrides: dict) -> ExperimentDef:
+    """Pop experiment-shaping keys out of `overrides` and build an inline
+    single-method, single-variation def. Used by train.py / train_dreamerv3.py
+    when run without `def=`. Mutates `overrides` in place by removing the
+    consumed keys.
+
+    Recognized keys (all optional except where noted):
+      agent_preset, task_preset, world_preset  (string or list)
+      total_steps          (required if no `stages:`)
+      n_stages             (defaults to 1 if total_steps given alone)
+      stages               (list of {steps, world_preset} dicts — rare on CLI)
+      mode                 ('bfs' or 'dfs', meaningless with one method, default 'bfs')
+      step_multiplier      (passes through; train.py applies it to stage.steps)
+    """
+    raw: dict = {}
+    for key in ("agent_preset", "task_preset", "world_preset",
+                "total_steps", "n_stages", "stages",
+                "mode", "step_multiplier"):
+        if key in overrides:
+            raw[key] = overrides.pop(key)
+    # Inline default: if only total_steps is given, treat as a single stage.
+    if "total_steps" in raw and "n_stages" not in raw and "stages" not in raw:
+        raw["n_stages"] = 1
+    raw["methods"] = [{"name": method_name}]
+    raw["seeds"] = 1
+    return build_experiment_def(raw, source=Path("<cli>"), exp_id="cli_run")
 
 
 def resolve_def_path(defs_dir: Path, name_or_path: str) -> Path:
