@@ -1,4 +1,4 @@
-# GPU-box machine config — one GPU, multiple cores.
+# GPU-box machine config — one GPU, ~20 vCPUs (Broadwell-class virtualized).
 #
 # Activate via:
 #   python scheduler_run.py <exp> --machine gpu_example
@@ -9,20 +9,25 @@
 # one of them runs at a time. Plain PPO can still run alongside the GPU job.
 #
 # n_envs is set per method here (not in the experiment def) since "how many
-# parallel envs make sense" depends on the box, not the experiment. Conservative
-# default: 1 env everywhere. Bump per method (and `needs` in lockstep) once
-# you've benchmarked — for ratsim Unity is the bottleneck for n_envs=1, so
-# vectorization can be a big win on PPO. Each Unity env is ~one cpu_slot.
+# parallel envs make sense" depends on the box, not the experiment. PPO and
+# dreamer both vectorize to 4 envs to amortize the slow per-step Unity round-
+# trip on this box's mediocre single-thread perf. recurrent_ppo stays at 1
+# because SB3's RecurrentPPO has per-env LSTM state and vectorizes less
+# cleanly (and the policy is on GPU anyway, so single-thread CPU matters less).
+#
+# cpu_slot accounting: each Unity env is roughly one cpu_slot of CPU work.
+# With cpu_slot=12 we can fit dreamer (4) + one PPO (4) + headroom, or up to
+# three parallel PPOs.
 
 resources:
   gpu: 1
-  cpu_slot: 6
+  cpu_slot: 12
 
 method_profiles:
   ppo:
     needs:
-      cpu_slot: 1
-    n_envs: 1
+      cpu_slot: 4
+    n_envs: 4
     args:
       method.device: cpu
 
@@ -37,13 +42,12 @@ method_profiles:
   dreamer:
     needs:
       gpu: 1
-      cpu_slot: 1
-    n_envs: 1
+      cpu_slot: 4
+    n_envs: 4
     # Dreamer has a known unfixed memory leak (~6-8 KB/env-step in the train
-    # process). On a 54 GB box this hit OOM after ~14 hours of training.
-    # SIGTERM at 30 GB lets the scheduler resume from the last periodic
-    # checkpoint (~10 min of progress lost per kill — cheap insurance).
-    # See /home/tom/dreamer_crash_summary.md for context.
+    # process). With n_envs=4 the leak fills 4x faster in wallclock terms,
+    # so SIGTERM at 30 GB still gives ~5-7 hours per cycle before kill —
+    # plenty of progress per resume. See /home/tom/dreamer_crash_summary.md.
     max_ram_gb: 30
     args:
       method.jax.platform: cuda
