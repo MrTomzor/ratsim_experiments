@@ -1,20 +1,25 @@
 """
-Train an RL agent on a run definition.
+Train an RL agent on an experiment def.
 
 Usage:
-    python train.py def=default_forest_foraging method=ppo
-    python train.py def=default_forest_foraging method=recurrent_ppo
-    python train.py def=default_forest_foraging method=cnn_ppo
-    python train.py def=default_forest_foraging method=cnn_recurrent_ppo
-    python train.py def=default_forest_foraging method=ppo name=my_run step_multiplier=2.0
-    python train.py def=default_forest_foraging method=ppo metaseed=42
+    python train.py def=method_compare method=ppo
+    python train.py def=method_compare method=ppo variation=baseline
+    python train.py def=gps_ablation method=dreamer variation=no_gps
+    python train.py def=method_compare method=ppo run_folder=my_run step_multiplier=2.0
+    python train.py def=method_compare method=ppo metaseed=42
+
+Resuming an existing run (e.g. from the scheduler):
+    # run only stage 3 of an existing run, loading from stage_2.zip
+    python train.py def=... method=ppo run_folder=my_run start_stage=3 end_stage=4
+
+`def=` accepts either a bare name (looked up in defs/) or a path to a yaml.
+`variation=` defaults to "baseline" — every experiment has at least that one
+implicitly.
 """
 
 import argparse
 import json
-import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -32,59 +37,20 @@ from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 from feature_extractors import LidarCnnExtractor
 
-
-# -- Run definition loading --------------------------------------------------
-
-def load_rundef(name_or_path: str) -> dict:
-    """Load a run definition YAML by name or file path."""
-    path = Path(name_or_path)
-    if path.suffix in (".yaml", ".yml") and path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f)
-    # Fall back to looking up by name in rundefs/
-    rundef_dir = Path(__file__).parent / "rundefs"
-    path = rundef_dir / f"{name_or_path}.yaml"
-    if not path.exists():
-        available = [f.stem for f in rundef_dir.glob("*.yaml")]
-        raise FileNotFoundError(
-            f"Run definition '{name_or_path}' not found at {path}\n"
-            f"Available: {available}"
-        )
-    with open(path) as f:
-        return yaml.safe_load(f)
+from experiment_defs import (
+    ExperimentDef,
+    StageSpec,
+    VariationSpec,
+    find_variation,
+    load_experiment_def,
+    resolve_agent_preset,
+    resolve_def_path,
+    resolve_stage_world,
+    resolve_task_preset,
+)
 
 
-# -- Config resolution -------------------------------------------------------
-
-def resolve_world_config(stage: dict) -> dict:
-    """Blend world presets and apply overrides for a stage."""
-    presets = stage.get("world_presets", ["default"])
-    cfg = blend_presets("world", presets)
-    overrides = stage.get("world_overrides", {})
-    cfg.update(overrides)
-    return cfg
-
-
-def resolve_task_config(rundef: dict, stage: dict | None = None) -> dict:
-    """Load and optionally override task config.
-
-    Rundef-level task_overrides are applied first, then stage-level task_overrides
-    (if a stage dict is provided) take precedence.
-    """
-    task_preset = rundef.get("task_preset", "default")
-    cfg = blend_presets("task", [task_preset])
-    overrides = rundef.get("task_overrides", {})
-    cfg.update(overrides)
-    if stage is not None:
-        stage_overrides = stage.get("task_overrides", {})
-        cfg.update(stage_overrides)
-    return cfg
-
-
-def resolve_agent_config(rundef: dict) -> dict:
-    """Load agent config from preset."""
-    agent_preset = rundef.get("agent_preset", "sphereagent_2d_lidar")
-    return blend_presets("agents", [agent_preset])
+DEFS_DIR = Path(__file__).parent / "defs"
 
 
 # -- Methods ------------------------------------------------------------------
@@ -117,24 +83,12 @@ METHODS = {
 }
 
 
-def get_max_episode_steps(rundef: dict, stages: list[dict]) -> int:
-    """Return the maximum episode_max_steps across all stages."""
-    base_task = blend_presets("task", [rundef.get("task_preset", "default")])
-    base_task.update(rundef.get("task_overrides", {}))
-    max_steps = base_task.get("episode_max_steps", 300)
-    for stage in stages:
-        stage_task = dict(base_task)
-        stage_task.update(stage.get("task_overrides", {}))
-        max_steps = max(max_steps, stage_task.get("episode_max_steps", max_steps))
-    return max_steps
-
-
 # Recurrent PPO preset profiles. Select via method.recurrent_preset=<name>
 # or override individual params with method.n_steps=... etc.
 RECURRENT_PRESETS = {
     # A) Full-episode unroll — correct LSTM training, slow on CPU
     "full_episode": {
-        "n_steps": "auto",      # set to max episode_max_steps across stages
+        "n_steps": "auto",      # set to max episode_max_steps
         "batch_size": "auto",   # set to n_steps
         "n_epochs": 15,
     },
@@ -161,7 +115,6 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
     method = METHODS[method_name]
     is_recurrent = method["sb3_class"] is RecurrentPPO
 
-    # Defaults that can be overridden by method_config
     kwargs = {
         "policy": method["policy"],
         "env": env,
@@ -173,41 +126,33 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
         "tensorboard_log": tb_log_dir,
     }
 
-    # Carry over policy_kwargs defined in the METHODS entry (e.g. CNN extractor).
     if "policy_kwargs" in method:
         import copy
         kwargs["policy_kwargs"] = copy.deepcopy(method["policy_kwargs"])
 
-    # Auto-populate CNN extractor params from the env.
     if "policy_kwargs" in kwargs and "features_extractor_kwargs" in kwargs.get("policy_kwargs", {}):
         ext_kwargs = kwargs["policy_kwargs"]["features_extractor_kwargs"]
-        # Unwrap VecEnv (DummyVecEnv/SubprocVecEnv) to reach the actual Gym env.
         unwrapped = env.envs[0].unwrapped if hasattr(env, "envs") else env.unwrapped
         ext_kwargs.setdefault("n_rays", unwrapped.num_lidar_rays)
         ext_kwargs.setdefault("n_channels", unwrapped.num_lidar_channels)
-        # Allow CLI overrides (method.cnn_output_dim, method.mlp_output_dim, etc.)
         for pname in ("n_rays", "n_channels", "cnn_output_dim"):
             if pname in method_config:
                 ext_kwargs[pname] = int(method_config.pop(pname))
 
-    # For recurrent policies: apply a preset profile, then let method_config override.
     if is_recurrent:
         preset_name = method_config.pop("recurrent_preset", RECURRENT_PRESET_DEFAULT)
         preset = RECURRENT_PRESETS[preset_name]
         print(f"[RecurrentPPO] Using preset '{preset_name}': {preset}")
-
         for k, v in preset.items():
             if k not in method_config:
                 if v == "auto" and max_episode_steps is not None:
                     v = max(2048, max_episode_steps)
                     print(f"[RecurrentPPO] Auto {k}={v} (max episode_max_steps={max_episode_steps})")
-                # Deep-merge policy_kwargs from preset into existing policy_kwargs
                 if k == "policy_kwargs" and "policy_kwargs" in kwargs:
                     kwargs["policy_kwargs"].update(v)
                 else:
                     kwargs[k] = v
 
-    # Deep-merge policy_kwargs from method_config into existing policy_kwargs
     if "policy_kwargs" in method_config and "policy_kwargs" in kwargs:
         kwargs["policy_kwargs"].update(method_config.pop("policy_kwargs"))
 
@@ -221,24 +166,18 @@ def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
 def print_model_summary(model):
     """Print key model size info for sanity checking."""
     policy = model.policy
-
-    # Features extractor output dim
     feat_dim = policy.features_extractor.features_dim
     extractor_name = type(policy.features_extractor).__name__
     print(f"\n{'='*50}")
     print(f"MODEL SUMMARY")
     print(f"{'='*50}")
     print(f"Features extractor: {extractor_name} -> {feat_dim}-dim")
-
-    # LSTM info if recurrent
     if hasattr(policy, "lstm_actor"):
         lstm = policy.lstm_actor
         print(f"LSTM (actor):  hidden_size={lstm.hidden_size}, num_layers={lstm.num_layers}")
     if hasattr(policy, "lstm_critic") and policy.lstm_critic is not None:
         lstm = policy.lstm_critic
         print(f"LSTM (critic): hidden_size={lstm.hidden_size}, num_layers={lstm.num_layers}")
-
-    # Total parameters
     total = sum(p.numel() for p in policy.parameters())
     trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"Total parameters:     {total:,}")
@@ -249,11 +188,7 @@ def print_model_summary(model):
 # -- Stage transition resets ---------------------------------------------------
 
 def reset_critic(model):
-    """Reinitialize value function weights, keeping the policy (actor) intact.
-
-    Resets: mlp_extractor critic path, value_net head, and for RecurrentPPO
-    the lstm_critic and critic projection if they exist.
-    """
+    """Reinitialize value function weights, keeping the policy (actor) intact."""
     policy = model.policy
 
     def reinit_module(module):
@@ -270,23 +205,17 @@ def reset_critic(model):
                     elif "bias" in name:
                         th.nn.init.constant_(param, 0.0)
 
-    # MLP extractor critic path
     reinit_module(policy.mlp_extractor.value_net)
-    # Final value head (Linear -> 1)
     th.nn.init.orthogonal_(policy.value_net.weight, gain=1.0)
     th.nn.init.constant_(policy.value_net.bias, 0.0)
-    # RecurrentPPO: separate critic LSTM and projection
     if hasattr(policy, "lstm_critic") and policy.lstm_critic is not None:
         reinit_module(policy.lstm_critic)
     if hasattr(policy, "critic") and policy.critic is not None:
         reinit_module(policy.critic)
-
     print("[StageTransition] Critic weights reinitialized")
 
 
 def reset_optimizer(model):
-    """Reset optimizer state (Adam momentum/variance) so stale statistics
-    from the previous stage don't interfere with the new distribution."""
     for state in model.policy.optimizer.state.values():
         state.clear()
     print("[StageTransition] Optimizer state cleared")
@@ -303,13 +232,11 @@ class TrainingMetricsCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         if self.n_calls % self.log_freq == 0:
-            # Collect completed-episode metrics (drains the buffers)
             all_distances = self.training_env.env_method("get_completed_episode_distances")
             all_pickups = self.training_env.env_method("get_completed_episode_pickups")
             all_explored = self.training_env.env_method("get_completed_episode_explored_area")
             longest_step_distance = self.training_env.env_method("get_longest_step_distance")
 
-            # Flatten lists from all vectorized envs
             flat_distances = [d for env_list in all_distances for d in env_list]
             flat_pickups = [p for env_list in all_pickups for p in env_list]
             flat_explored = [e for env_list in all_explored for e in env_list]
@@ -321,26 +248,23 @@ class TrainingMetricsCallback(BaseCallback):
             if flat_explored:
                 self.logger.record("custom/avg_explored_area_m2", np.mean(flat_explored))
             self.logger.record("custom/longest_step_distance", np.max(longest_step_distance))
-
         return True
 
 
-# -- Main ---------------------------------------------------------------------
+# -- CLI ----------------------------------------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train an RL agent on a run definition.")
+    parser = argparse.ArgumentParser(description="Train an RL agent on an experiment def.")
     parser.add_argument("overrides", nargs="*", help="key=value overrides")
     return parser.parse_args()
 
 
 def parse_overrides(override_list: list[str]) -> dict:
-    """Parse key=value pairs from the command line."""
     result = {}
     for item in override_list:
         if "=" not in item:
             raise ValueError(f"Invalid override '{item}', expected key=value")
         key, value = item.split("=", 1)
-        # Try to parse as number/bool
         try:
             value = yaml.safe_load(value)
         except yaml.YAMLError:
@@ -353,51 +277,93 @@ def main():
     args = parse_args()
     overrides = parse_overrides(args.overrides)
 
-    # Required args
-    rundef_name = overrides.pop("def", None)
+    # Required: experiment def. Optional: variation, method, run_folder, ...
+    def_arg = overrides.pop("def", None)
     method_name = overrides.pop("method", "ppo")
-    if rundef_name is None:
-        print("Usage: python train.py def=<rundef_name> method=<method_name> [overrides...]")
+    if def_arg is None:
+        print("Usage: python train.py def=<exp_id_or_path> [variation=<name>] "
+              "method=<method_name> [overrides...]")
         sys.exit(1)
-    rundef_name_clean = Path(rundef_name).stem  # strip path and .yaml extension
+    variation_name = overrides.pop("variation", "baseline")
 
-    # Optional args
-    run_name = overrides.pop("name", f"{rundef_name_clean}_{method_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    step_multiplier = float(overrides.pop("step_multiplier", 1.0))
+    def_path = resolve_def_path(DEFS_DIR, def_arg)
+    if not def_path.exists():
+        available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
+        print(f"[train] ERROR: experiment def not found at {def_path}\n"
+              f"        Available in {DEFS_DIR}: {available}")
+        sys.exit(1)
+    exp = load_experiment_def(def_path)
+    variation = find_variation(exp, variation_name)
+
+    # `run_folder` is canonical; `name=` is a deprecated alias.
+    run_folder = overrides.pop("run_folder", None)
+    legacy_name = overrides.pop("name", None)
+    if legacy_name is not None:
+        if run_folder is None:
+            print("[train] WARNING: name= is deprecated, use run_folder= instead")
+            run_folder = legacy_name
+        else:
+            print("[train] WARNING: both name= and run_folder= given; using run_folder=")
+    if run_folder is None:
+        run_folder = (f"{exp.exp_id}_{variation_name}_{method_name}_"
+                      f"{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    run_name = run_folder
+
+    step_multiplier = float(overrides.pop("step_multiplier", exp.step_multiplier))
     n_envs = int(overrides.pop("n_envs", 1))
     base_port_arg = overrides.pop("base_port", None)
     base_port = int(base_port_arg) if base_port_arg is not None else None
-    # If no metaseed provided, generate random number (not a benchmark with specific seed -> want some variability between runs)
+
+    # Stage range: [start_stage, end_stage). Defaults run all stages.
+    start_stage = int(overrides.pop("start_stage", 0))
+    end_stage_arg = overrides.pop("end_stage", None)
+
+    # Random metaseed by default — non-benchmark runs want some seed variability
+    # between invocations.
     default_metaseed = np.random.randint(0, 10000)
-    metaseed = overrides.pop("metaseed", default_metaseed)
+    metaseed = int(overrides.pop("metaseed", default_metaseed))
     method_config_file = overrides.pop("method_config", None)
 
-    # Load method config from file if specified, then apply remaining overrides
-    method_config = {}
+    # Method config: priority (lowest → highest):
+    #   variation.method_args (from def file)
+    #   method_config file (if given)
+    #   CLI method.X=Y overrides
+    method_config: dict = dict(variation.method_args)
     if method_config_file is not None:
         with open(method_config_file) as f:
-            method_config = yaml.safe_load(f)
-
-    # Any remaining overrides that start with "method." go into method_config
+            method_config.update(yaml.safe_load(f) or {})
     for key in list(overrides.keys()):
         if key.startswith("method."):
             method_config[key.removeprefix("method.")] = overrides.pop(key)
 
-    # Load run definition
-    rundef = load_rundef(rundef_name)
-    stages = rundef["stages"]
+    # Validate stage range
+    n_stages = len(exp.stages)
+    end_stage = n_stages if end_stage_arg is None else int(end_stage_arg)
+    if start_stage < 0 or start_stage >= n_stages:
+        print(f"[train] ERROR: start_stage={start_stage} out of range [0, {n_stages})")
+        sys.exit(1)
+    if end_stage <= start_stage or end_stage > n_stages:
+        print(f"[train] ERROR: end_stage={end_stage} must be in ({start_stage}, {n_stages}]")
+        sys.exit(1)
 
-    # Resolve configs
-    agent_config = resolve_agent_config(rundef)
+    # Resolve agent + task configs (constant across stages within a variation).
+    agent_preset_list = resolve_agent_preset(exp, variation)
+    task_preset_list = resolve_task_preset(exp, variation)
+    agent_config = blend_presets("agents", agent_preset_list)
+    task_config_full = blend_presets("task", task_preset_list)
+    max_episode_steps = int(task_config_full.get("episode_max_steps", 300))
 
     # Output directory
     results_dir = Path(__file__).parent / "results" / run_name
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save the full resolved config for reproducibility
     run_meta = {
-        "rundef": rundef_name_clean,
+        "exp_id": exp.exp_id,
+        "exp_def": str(exp.source),
+        "variation": variation_name,
         "method": method_name,
+        "agent_preset": agent_preset_list,
+        "task_preset": task_preset_list,
         "method_config": method_config,
         "step_multiplier": step_multiplier,
         "metaseed": metaseed,
@@ -414,7 +380,8 @@ def main():
     episode_log_path = results_dir / "train_episodes.jsonl"
     base_run_metadata = {
         "method": method_name,
-        "rundef": rundef_name_clean,
+        "exp_id": exp.exp_id,
+        "variation": variation_name,
         "seed": int(metaseed),
     }
 
@@ -425,32 +392,38 @@ def main():
     unity_instances = allocate_unity_instances(**alloc_kwargs)
     unity_ports = [inst.port for inst in unity_instances]
     print(f"[train] n_envs={n_envs}, unity_ports={unity_ports}")
+    print(f"[train] exp={exp.exp_id} variation={variation_name} method={method_name}")
+    print(f"[train] agent_preset={agent_preset_list} task_preset={task_preset_list}")
 
-    # Train each stage sequentially
     model = None
     total_steps_trained = 0
-    max_episode_steps = get_max_episode_steps(rundef, stages)
 
-    for stage_idx, stage in enumerate(stages):
-        world_config = resolve_world_config(stage)
-        task_config = resolve_task_config(rundef, stage)
-        stage_steps = int(stage["steps"] * step_multiplier)
+    # Resume from the previous stage's checkpoint if start_stage > 0.
+    if start_stage > 0:
+        prev_ckpt = checkpoint_dir / f"stage_{start_stage - 1}.zip"
+        if not prev_ckpt.exists():
+            print(f"[train] ERROR: start_stage={start_stage} but {prev_ckpt} does not exist")
+            sys.exit(1)
+        sb3_class = METHODS[method_name]["sb3_class"]
+        print(f"[train] Resuming from {prev_ckpt}")
+        model = sb3_class.load(str(prev_ckpt), tensorboard_log=tb_log_dir)
+
+    for stage_idx in range(start_stage, end_stage):
+        stage = exp.stages[stage_idx]
+        world_preset_list = resolve_stage_world(stage, variation, exp)
+        world_config = blend_presets("world", world_preset_list)
+        task_config = task_config_full  # no per-stage task overrides in current schema
+        stage_steps = int(stage.steps * step_multiplier)
 
         print(f"\n{'='*60}")
-        print(f"Stage {stage_idx + 1}/{len(stages)}: {stage.get('world_presets', ['?'])}")
+        print(f"Stage {stage_idx + 1}/{n_stages}: world={world_preset_list}")
         print(f"Steps: {stage_steps} (multiplier: {step_multiplier})")
         print(f"{'='*60}\n")
 
         stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
 
-        # Build one env factory per Unity port. env_idx goes into run_metadata so
-        # JSONL lines from parallel envs are distinguishable (episode_idx is
-        # per-env when n_envs>1).
-        def make_env_factory(port, env_idx):
-            wc = world_config
+        def make_env_factory(port, env_idx, wc=world_config, tc=task_config):
             md = {**stage_run_metadata, "env_idx": env_idx}
-            tc = task_config
-
             def _make():
                 env = WildfireGymEnv(
                     worldgen_config=wc,
@@ -463,9 +436,6 @@ def main():
                     run_metadata=md,
                     unity_port=port,
                 )
-                # SB3's Monitor wrapper exposes ep_rew_mean / ep_len_mean to
-                # tensorboard under rollout/. make_vec_env applied this
-                # automatically; we have to do it explicitly here.
                 return Monitor(env)
             return _make
 
@@ -474,16 +444,15 @@ def main():
         env = VecEnvCls(env_fns)
 
         is_stage_transition = model is not None
-        reset_on_stage = rundef.get("reset_on_stage_change", False)
+        # NOTE: reset_on_stage_change is no longer in the experiment def schema.
+        # If we need it back, add it as an exp-level field.
+        reset_on_stage = False
 
         if not is_stage_transition:
             model = create_model(method_name, env, method_config, tb_log_dir,
-                                max_episode_steps=max_episode_steps)
+                                 max_episode_steps=max_episode_steps)
         else:
-            # Continue training with new env
             model.set_env(env)
-
-            # Stage transition resets
             if reset_on_stage:
                 reset_critic(model)
                 reset_optimizer(model)
@@ -491,27 +460,31 @@ def main():
         model.learn(
             total_timesteps=stage_steps,
             callback=TrainingMetricsCallback(),
-            # Reset LR schedule on stage change so it doesn't continue decayed
             reset_num_timesteps=is_stage_transition and reset_on_stage,
         )
-
         total_steps_trained += stage_steps
 
-        # Save checkpoint after each stage
         checkpoint_path = checkpoint_dir / f"stage_{stage_idx}"
         model.save(str(checkpoint_path))
+        (checkpoint_dir / f"stage_{stage_idx}.done").touch()
         print(f"Saved checkpoint: {checkpoint_path}")
 
         env.close()
 
-    # Save final model
-    final_path = checkpoint_dir / "final"
-    model.save(str(final_path))
-
-    (results_dir / "DONE").touch()
-
-    print(f"\nTraining complete. Final model: {final_path}")
-    print(f"Total steps: {total_steps_trained}")
+    # Final model + top-level DONE only when *all* stages are present.
+    all_stages_done = all(
+        (checkpoint_dir / f"stage_{i}.done").exists() for i in range(n_stages)
+    )
+    if all_stages_done:
+        final_path = checkpoint_dir / "final"
+        model.save(str(final_path))
+        (results_dir / "DONE").touch()
+        print(f"\nTraining complete. Final model: {final_path}")
+    else:
+        completed = [i for i in range(n_stages)
+                     if (checkpoint_dir / f"stage_{i}.done").exists()]
+        print(f"\nPartial run: stages done = {completed} / {n_stages}")
+    print(f"Total steps this invocation: {total_steps_trained}")
     print(f"Results dir: {results_dir}")
 
 

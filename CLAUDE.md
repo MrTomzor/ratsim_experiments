@@ -18,22 +18,39 @@ ratsim_experiments
 | Layer | Location | Purpose |
 |-------|----------|---------|
 | **Presets** | `ratsim/config_blender/` (core repo) | Sim vocabulary — world types, agent bodies, task rules. Reusable across all consumers. |
-| **Run definitions** | `rundefs/` (this repo) | Named sequences of (world presets + overrides, steps). Referenced by train.py and test.py. |
-| **Orchestration** | CLI args + queue files (this repo) | Which rundef × method × seeds to run. Step multipliers, method configs, eval seeds. |
+| **Experiment defs** | `defs/` (this repo) | Named experiment specs: agent + task + stages, methods × variations × seeds, BFS/DFS. The unit train.py and the scheduler both consume. |
+| **Orchestration** | scheduler + machine config | Which experiment to run, on which machine, at what step multiplier. |
 
-### Run definitions
+### Experiment defs
 
-A run definition (`rundefs/*.yaml`) specifies a sequence of stages, each with world presets and step counts. Agent and task presets are set once for the whole definition. Run definitions are method-agnostic — the same rundef can be used for training (train.py) and evaluation (test.py).
+An experiment def (`defs/*.yaml`) is a single file declaring everything an
+experiment needs: agent preset, task preset, world preset(s), the curriculum
+of stages, the methods to compare, the variations (override bundles) to test,
+seed counts, and BFS/DFS mode. Same file used by ad-hoc training (`train.py
+def=<name>`) and the scheduler (`python -m scheduler.scheduler run <name>`).
 
 ```yaml
 agent_preset: sphereagent_2d_lidar
-task_preset: default
-stages:
-  - world_presets: [default]
-    world_overrides:
-      vegetation/tree1/density: 0.01
-    steps: 1_000_000
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_default
+
+total_steps: 10_000_000     # short form: equal stages of total/n
+n_stages: 10
+mode: bfs
+
+methods:
+  - {name: ppo}
+  - {name: dreamer}
+seeds: 3
+
+variations:                  # optional; default is [{name: baseline}]
+  - {name: with_gps}
+  - {name: no_gps, agent_preset: sphereagent_2d_lidar_no_gps}
 ```
+
+Long form: replace `total_steps:` + `n_stages:` with an explicit `stages:`
+list (one entry per stage with its own `world_preset` + `steps`). See
+`scheduler/README.md` for the full schema and the override resolution rules.
 
 ### Method-invariant evaluation
 
@@ -43,7 +60,7 @@ All methods produce the same JSONL schema, one JSON object per episode:
 {"method": "ppo", "rundef": "...", "stage_idx": 0, "seed": 42, "episode_idx": 1, "steps": 300, "total_score": 15.0, "objects_found": 3, "collisions": 1, "termination_reason": "max_steps", "distance_traveled": 450.2, "wall_time_s": 12.3}
 ```
 
-- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices. With `n_envs>1`, all parallel envs append to the same JSONL: each line carries an `env_idx` field so you can group/dedupe per-env, and `episode_idx` is per-env (i.e. unique within an `env_idx` but not globally).
+- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. The `run_metadata` carries `exp_id`, `variation`, `method`, `seed`, `stage_idx`, `env_idx` so per-line filtering / grouping is trivial. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices. With `n_envs>1`, all parallel envs append to the same JSONL: each line carries an `env_idx` field so you can group/dedupe per-env, and `episode_idx` is per-env (i.e. unique within an `env_idx` but not globally).
 - **Evaluation**: `results/<run_name>/eval_episodes.jsonl` — written by `test.py` via `make_episode_result()`.
 - **DONE marker**: `results/<run_name>/DONE` (empty file) is touched at the end of a successful run. `analyze_run_data.py` warns on any run dir missing it (run crashed or still in progress).
 
@@ -53,6 +70,18 @@ TaskTracker (from the core ratsim repo) is the single source of truth for episod
 
 - **PPO** (`train.py`): saves `checkpoints/stage_<i>.zip` after each stage, plus `checkpoints/final.zip`.
 - **DreamerV3** (`train_dreamerv3.py`): embodied's rolling `ckpt/latest` pointer is snapshotted into `checkpoints/stage_<i>/` after each stage and `checkpoints/final/` at the end, mirroring PPO's per-stage layout.
+- **Per-stage marker**: `checkpoints/stage_<i>.done` is touched after the checkpoint write/copy fully completes, so the scheduler can distinguish "stage finished" from "process killed mid-save". Top-level `DONE` is only touched when every stage has its `.done` marker — a partial / resumed run won't falsely claim full completion.
+
+### Resuming a run
+
+Both training scripts accept `start_stage=K end_stage=K+1` (end exclusive) to run a single stage of an existing run, loading the previous stage's checkpoint:
+
+```bash
+python train.py def=method_compare method=ppo run_folder=my_run start_stage=3 end_stage=4
+python train_dreamerv3.py def=method_compare run_folder=my_run start_stage=3 end_stage=4
+```
+
+This is the primitive the scheduler uses to interleave stages across methods × variations × seeds. PPO loads `checkpoints/stage_<K-1>.zip`; Dreamer relies on embodied's rolling `ckpt/latest` in the same `dreamer_logdir/` and re-targets `run.steps` to the cumulative end of stage K.
 
 ### Analysis
 
@@ -79,62 +108,64 @@ Human control is handled via `/enable_human_control` topic sent to Unity. The co
 
 ```
 ratsim_experiments/
-├── train.py                 # Train PPO / RecurrentPPO on a run definition
+├── train.py                 # Train PPO / RecurrentPPO on an experiment def
 ├── train_dreamerv3.py       # Train DreamerV3 (separate venv — jax/embodied)
 ├── test.py                  # Evaluate a method on a run definition (RL, human, etc.)
 ├── analyze_run_data.py      # Load train_episodes.jsonl(s) → tables + plots
 ├── overnight_batch.sh       # Example bash queue for long unattended runs
-├── rundefs/                 # Named run definitions (YAML)
+├── experiment_defs.py       # Schema + loader for defs/*.yaml (shared by train + scheduler)
+├── defs/                    # Experiment definitions (YAML)
 │   └── *.yaml
+├── scheduler/               # Multi-run orchestrator (BFS/DFS, resume, machine configs)
+│   ├── scheduler.py
+│   ├── config.py
+│   └── machines/*.yaml
 ├── results/                 # Output directory (gitignored)
-│   └── <run_name>/
-│       ├── run_config.json or eval_config.json
-│       ├── train_episodes.jsonl    # training episodes, written by env
-│       ├── eval_episodes.jsonl     # eval episodes, written by test.py
-│       ├── DONE                    # empty marker file, touched on clean finish
-│       ├── tensorboard/
-│       └── checkpoints/
-│           ├── stage_0.zip / stage_0/    # PPO: zip; Dreamer: dir
-│           ├── ...
-│           └── final.zip / final/
+│   ├── <run_name>/                       # Ad-hoc training runs
+│   └── experiments/<exp_id>/             # Scheduler-driven experiments
+│       ├── experiment.yaml               # snapshot of the def
+│       ├── state.json                    # mutable: pids, failures
+│       ├── DONE
+│       └── runs/<variation>__<method>__seed<i>/
+│           └── ... (same layout as ad-hoc)
 ├── pyproject.toml
 └── .gitignore
 ```
 
 ## Usage
 
-The `def=` argument accepts either a name (looked up in `rundefs/`) or a file path (tab-completable). File paths are sanitized automatically for result folder naming.
+The `def=` argument accepts either a name (looked up in `defs/`) or a file path (tab-completable). Use `run_folder=<name>` to control the output directory. `variation=<name>` defaults to `baseline` — every experiment has at least that one implicitly when `variations:` is omitted from the def.
 
 ```bash
 # Train (by name or path)
-python train.py def=default_forest_foraging method=ppo name=my_run
-python train.py def=rundefs/default_forest_foraging.yaml method=ppo
-python train.py def=default_forest_foraging method=recurrent_ppo step_multiplier=2.0
+python train.py def=method_compare method=ppo run_folder=my_run
+python train.py def=defs/method_compare.yaml method=ppo
+python train.py def=method_compare method=ppo step_multiplier=2.0
 
-# Evaluate trained model
+# Train a specific variation
+python train.py def=gps_ablation method=ppo variation=no_gps
+
+# Evaluate trained model (test.py still uses the old rundef path; needs porting)
 python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip
-python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip eval_seeds=42,123,456
-
-# Infinite eval (runs seeds 1,2,3,... until Ctrl+C, then prints summary)
-python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip eval_seeds=inf
-
-# Human evaluation (with real-time factor for smooth visuals)
 python test.py def=default_forest_foraging method=human rtf=1.0
 
 # Method config overrides
-python train.py def=default_forest_foraging method=ppo method.learning_rate=1e-4
-python train.py def=default_forest_foraging method=recurrent_ppo method_config=configs/lstm256.yaml
+python train.py def=method_compare method=ppo method.learning_rate=1e-4
+python train.py def=method_compare method=recurrent_ppo method_config=configs/lstm256.yaml
 
 # Vectorized training (requires RATSIM_UNITY_BIN; spawns n_envs Unity instances on 9100+)
-python train.py def=default_forest_foraging method=ppo n_envs=8
-python train_dreamerv3.py def=default_forest_foraging n_envs=2  # CUDA by default; use method.jax.platform=cpu to force CPU
+python train.py def=method_compare method=ppo n_envs=8
+python train_dreamerv3.py def=method_compare n_envs=2  # CUDA by default; use method.jax.platform=cpu
 
 # Two parallel runs on the same box: pass non-overlapping base_port
-python train.py def=default_forest_foraging method=ppo n_envs=4 base_port=9100  # uses 9100-9103
-python train.py def=default_forest_foraging method=ppo n_envs=4 base_port=9110  # uses 9110-9113
+python train.py def=method_compare method=ppo n_envs=4 base_port=9100  # 9100-9103
+python train.py def=method_compare method=ppo n_envs=4 base_port=9110  # 9110-9113
+
+# Or just let the scheduler do all of this for you:
+python -m scheduler.scheduler run method_compare
 ```
 
-Result folders are named `<rundef>_<method>_<YYYYMMDD_HHMMSS>` (e.g., `default_forest_foraging_ppo_20260401_143022`).
+Ad-hoc result folders are named `<exp_id>_<variation>_<method>_<YYYYMMDD_HHMMSS>`. Scheduler-driven runs go to `results/experiments/<exp_id>/runs/<variation>__<method>__seed<n>/`.
 
 ## Seeds
 

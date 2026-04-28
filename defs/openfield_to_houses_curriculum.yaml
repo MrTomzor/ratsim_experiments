@@ -1,0 +1,30 @@
+# Curriculum: empty open field → simple-houses → 130-houses (full task).
+#
+# Demonstrates the long-form `stages:` syntax. Each stage gets its own
+# world_preset; agent + task are constant across the whole curriculum.
+#
+# 3 phases × 3 stages each = 9 stages (BFS interleaves at every boundary).
+#
+# Cardinality: 1 variation × 2 methods × 2 seeds = 4 runs.
+
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+
+stages:
+  - {world_preset: empty_box,             steps: 1_000_000}   # phase 1: open field
+  - {world_preset: empty_box,             steps: 1_000_000}
+  - {world_preset: empty_box,             steps: 1_000_000}
+  - {world_preset: empty_box_simplehouses, steps: 1_000_000}  # phase 2: a few houses
+  - {world_preset: empty_box_simplehouses, steps: 1_000_000}
+  - {world_preset: empty_box_simplehouses, steps: 1_000_000}
+  - {world_preset: empty_box_130_houses,  steps: 1_000_000}   # phase 3: full clutter
+  - {world_preset: empty_box_130_houses,  steps: 1_000_000}
+  - {world_preset: empty_box_130_houses,  steps: 1_000_000}
+
+mode: bfs
+
+methods:
+  - name: ppo
+  - name: dreamer
+
+seeds: 2

@@ -1,18 +1,22 @@
-"""Train DreamerV3 on a run definition.
+"""Train DreamerV3 on an experiment def.
 
 Mirrors the CLI of train.py for parity with the SB3 methods:
 
-    python train_dreamerv3.py def=default_forest_foraging
-    python train_dreamerv3.py def=default_forest_foraging name=my_run metaseed=42
-    python train_dreamerv3.py def=default_forest_foraging size=size12m step_multiplier=2.0
-    python train_dreamerv3.py def=default_forest_foraging method.batch_size=8
+    python train_dreamerv3.py def=method_compare
+    python train_dreamerv3.py def=method_compare variation=baseline
+    python train_dreamerv3.py def=method_compare run_folder=my_run metaseed=42
+    python train_dreamerv3.py def=method_compare size=size12m step_multiplier=2.0
+    python train_dreamerv3.py def=method_compare method.batch_size=8
+
+Resuming an existing run (e.g. from the scheduler):
+    python train_dreamerv3.py def=... run_folder=my_run start_stage=3 end_stage=4
 
 Notes
 -----
 * Activate the dreamer venv first: ``source ~/ratvenv/dreamer_venv/bin/activate``.
-* Multi-stage rundefs are supported: each stage re-enters the embodied train
-  loop with a new env factory (potentially different world_presets) while the
-  agent checkpoint and replay buffer carry over. The step counter is cumulative.
+* Multi-stage curricula are supported: each stage re-enters the embodied train
+  loop with a new env factory while the agent checkpoint and replay buffer
+  carry over. The step counter is cumulative.
 * Defaults to CUDA JAX (``jax.platform=cuda``); pass
   ``method.jax.platform=cpu`` to force CPU on a box without a GPU.
 """
@@ -29,7 +33,6 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-# DreamerV3 imports — these require the `dreamer_venv` environment.
 import elements
 import embodied
 import ruamel.yaml as ryaml
@@ -42,43 +45,23 @@ from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
 
-
-# -- Run definition loading (mirrors train.py) -------------------------------
-
-def load_rundef(name_or_path: str) -> dict:
-    path = Path(name_or_path)
-    if path.suffix in (".yaml", ".yml") and path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f)
-    rundef_dir = Path(__file__).parent / "rundefs"
-    path = rundef_dir / f"{name_or_path}.yaml"
-    if not path.exists():
-        available = [f.stem for f in rundef_dir.glob("*.yaml")]
-        raise FileNotFoundError(
-            f"Run definition '{name_or_path}' not found at {path}\nAvailable: {available}"
-        )
-    with open(path) as f:
-        return yaml.safe_load(f)
+from experiment_defs import (
+    ExperimentDef,
+    StageSpec,
+    VariationSpec,
+    find_variation,
+    load_experiment_def,
+    resolve_agent_preset,
+    resolve_def_path,
+    resolve_stage_world,
+    resolve_task_preset,
+)
 
 
-def resolve_world_config(stage: dict) -> dict:
-    cfg = blend_presets("world", stage.get("world_presets", ["default"]))
-    cfg.update(stage.get("world_overrides", {}))
-    return cfg
+DEFS_DIR = Path(__file__).parent / "defs"
 
 
-def resolve_task_config(rundef: dict, stage: dict) -> dict:
-    cfg = blend_presets("task", [rundef.get("task_preset", "default")])
-    cfg.update(rundef.get("task_overrides", {}))
-    cfg.update(stage.get("task_overrides", {}))
-    return cfg
-
-
-def resolve_agent_config(rundef: dict) -> dict:
-    return blend_presets("agents", [rundef.get("agent_preset", "sphereagent_2d_lidar")])
-
-
-# -- CLI override parsing (mirrors train.py) ---------------------------------
+# -- CLI override parsing ----------------------------------------------------
 
 def parse_overrides(items: list[str]) -> dict:
     out = {}
@@ -95,23 +78,27 @@ def parse_overrides(items: list[str]) -> dict:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train DreamerV3 on a run definition.")
+    p = argparse.ArgumentParser(description="Train DreamerV3 on an experiment def.")
     p.add_argument("overrides", nargs="*")
     return p.parse_args()
 
 
-# -- Env factory passed to embodied ------------------------------------------
+# -- Env factory passed to embodied -----------------------------------------
 
-def _build_gym_env(rundef: dict, stage: dict, metaseed: int,
+def _build_gym_env(exp: ExperimentDef, variation: VariationSpec, stage: StageSpec,
+                   metaseed: int,
                    episode_log_path: "Path | None" = None,
                    run_metadata: "dict | None" = None,
                    unity_port: int = 9000) -> WildfireGymEnv:
+    world_preset_list = resolve_stage_world(stage, variation, exp)
+    agent_preset_list = resolve_agent_preset(exp, variation)
+    task_preset_list = resolve_task_preset(exp, variation)
     return WildfireGymEnv(
-        worldgen_config=resolve_world_config(stage),
-        agent_config=resolve_agent_config(rundef),
+        worldgen_config=blend_presets("world", world_preset_list),
+        agent_config=blend_presets("agents", agent_preset_list),
         sensor_config={},
         action_config={"control_mode": "velocity"},
-        task_config=resolve_task_config(rundef, stage),
+        task_config=blend_presets("task", task_preset_list),
         metaworldgen_config={"world_generation_metaseed": metaseed},
         episode_log_path=episode_log_path,
         run_metadata=run_metadata,
@@ -119,7 +106,7 @@ def _build_gym_env(rundef: dict, stage: dict, metaseed: int,
     )
 
 
-def make_env(config, rundef, stage, metaseed, index,
+def make_env(config, exp, variation, stage, metaseed, index,
              episode_log_path=None, run_metadata=None,
              unity_ports=None, **overrides):
     """embodied-style env factory. `index` selects which Unity port to use."""
@@ -130,7 +117,7 @@ def make_env(config, rundef, stage, metaseed, index,
     md = run_metadata
     if md is not None:
         md = {**md, "env_idx": index}
-    gym_env = _build_gym_env(rundef, stage, metaseed + index,
+    gym_env = _build_gym_env(exp, variation, stage, metaseed + index,
                              episode_log_path=episode_log_path,
                              run_metadata=md,
                              unity_port=port)
@@ -138,11 +125,10 @@ def make_env(config, rundef, stage, metaseed, index,
     return wrap_env(env, config)
 
 
-def make_agent(config, rundef, stage, metaseed, unity_ports):
+def make_agent(config, exp, variation, stage, metaseed, unity_ports):
     """embodied-style agent factory; mirrors dreamerv3.main.make_agent."""
     from dreamerv3.agent import Agent
-    # Agent factory builds a temporary env to read obs/act spaces; no logging needed here.
-    env = make_env(config, rundef, stage, metaseed, 0, unity_ports=unity_ports)
+    env = make_env(config, exp, variation, stage, metaseed, 0, unity_ports=unity_ports)
     notlog = lambda k: not k.startswith("log/")
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
     act_space = {k: v for k, v in env.act_space.items() if k != "reset"}
@@ -176,12 +162,9 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
     config = elements.Config(raw["defaults"])
     config = config.update(raw[size])
 
-    # Defaults appropriate for ratsim + CPU.
-    # replay.size: dreamerv3 default is 5e6, sized for Atari with small obs.
-    # ratsim stores the full RSSM state (`dyn/deter` 512 + `dyn/stoch` 32x4)
-    # alongside each step in replay, so per-step cost is ~3 KB and a 5M buffer
-    # OOMs the cloud box at ~3.3M filled steps. 1M is plenty for runs of this
-    # scale and keeps the in-memory replay around 5-10 GB.
+    # replay.size: dreamerv3's default of 5M is sized for Atari; we hold full
+    # RSSM state per step (~3 KB), so a 5M buffer OOMs the cloud box. 1M is
+    # plenty and keeps in-memory replay around 5-10 GB.
     config = config.update({
         "logdir": str(logdir),
         "task": "ratsim_wildfire",  # cosmetic; we bypass the suite switch in main.py
@@ -203,21 +186,13 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "logger.outputs": ["jsonl", "tensorboard"],
     })
 
-    # User overrides (`method.jax.platform=cuda`, `method.batch_size=4`, etc.)
     if method_overrides:
         config = config.update(method_overrides)
-
     return config
 
 
-# -- Checkpoint snapshotting -------------------------------------------------
-
 def snapshot_latest_ckpt(logdir: Path, dest: Path) -> None:
-    """Copy embodied's rolling `ckpt/latest` into a stable per-stage dest.
-
-    Mirrors PPO's per-stage checkpoint behavior so the eval script can load
-    `results/<run>/checkpoints/stage_N/` directly.
-    """
+    """Copy embodied's rolling `ckpt/latest` into a stable per-stage dest."""
     latest_pointer = logdir / "ckpt" / "latest"
     if not latest_pointer.exists():
         print(f"[dreamerv3] WARNING: no ckpt/latest at {latest_pointer}; skipping snapshot")
@@ -233,29 +208,54 @@ def snapshot_latest_ckpt(logdir: Path, dest: Path) -> None:
     print(f"[dreamerv3] Snapshot: {dest}")
 
 
-# -- Main --------------------------------------------------------------------
-
 def main():
     args = parse_args()
     overrides = parse_overrides(args.overrides)
 
-    rundef_name = overrides.pop("def", None)
-    if rundef_name is None:
-        print("Usage: python train_dreamerv3.py def=<rundef_name> [overrides...]")
+    def_arg = overrides.pop("def", None)
+    if def_arg is None:
+        print("Usage: python train_dreamerv3.py def=<exp_id_or_path> "
+              "[variation=<name>] [overrides...]")
         sys.exit(1)
+    variation_name = overrides.pop("variation", "baseline")
 
-    rundef_stem = Path(rundef_name).stem
-    run_name = overrides.pop(
-        "name", f"{rundef_stem}_dreamerv3_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    )
-    step_multiplier = float(overrides.pop("step_multiplier", 1.0))
+    def_path = resolve_def_path(DEFS_DIR, def_arg)
+    if not def_path.exists():
+        available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
+        print(f"[dreamerv3] ERROR: experiment def not found at {def_path}\n"
+              f"            Available in {DEFS_DIR}: {available}")
+        sys.exit(1)
+    exp = load_experiment_def(def_path)
+    variation = find_variation(exp, variation_name)
+
+    run_folder = overrides.pop("run_folder", None)
+    legacy_name = overrides.pop("name", None)
+    if legacy_name is not None:
+        if run_folder is None:
+            print("[dreamerv3] WARNING: name= is deprecated, use run_folder= instead")
+            run_folder = legacy_name
+        else:
+            print("[dreamerv3] WARNING: both name= and run_folder= given; using run_folder=")
+    if run_folder is None:
+        run_folder = (f"{exp.exp_id}_{variation_name}_dreamerv3_"
+                      f"{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    run_name = run_folder
+
+    step_multiplier = float(overrides.pop("step_multiplier", exp.step_multiplier))
     metaseed = int(overrides.pop("metaseed", np.random.randint(0, 10000)))
     size = overrides.pop("size", DEFAULT_SIZE)
     n_envs = int(overrides.pop("n_envs", 1))
     base_port_arg = overrides.pop("base_port", None)
     base_port = int(base_port_arg) if base_port_arg is not None else None
 
-    method_overrides = {}
+    start_stage = int(overrides.pop("start_stage", 0))
+    end_stage_arg = overrides.pop("end_stage", None)
+
+    # Method overrides priority (lowest → highest):
+    #   variation.method_args (from def file)
+    #   method_config file (if given)
+    #   CLI method.X=Y overrides
+    method_overrides: dict = dict(variation.method_args)
     method_config_file = overrides.pop("method_config", None)
     if method_config_file is not None:
         with open(method_config_file) as f:
@@ -264,8 +264,14 @@ def main():
         if key.startswith("method."):
             method_overrides[key.removeprefix("method.")] = overrides.pop(key)
 
-    rundef = load_rundef(rundef_name)
-    stages = rundef["stages"]
+    n_stages = len(exp.stages)
+    end_stage = n_stages if end_stage_arg is None else int(end_stage_arg)
+    if start_stage < 0 or start_stage >= n_stages:
+        print(f"[dreamerv3] ERROR: start_stage={start_stage} out of range [0, {n_stages})")
+        sys.exit(1)
+    if end_stage <= start_stage or end_stage > n_stages:
+        print(f"[dreamerv3] ERROR: end_stage={end_stage} must be in ({start_stage}, {n_stages}]")
+        sys.exit(1)
 
     results_dir = Path(__file__).parent / "results" / run_name
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -277,49 +283,49 @@ def main():
     episode_log_path = results_dir / "train_episodes.jsonl"
     base_run_metadata = {
         "method": "dreamerv3",
-        "rundef": rundef_stem,
+        "exp_id": exp.exp_id,
+        "variation": variation_name,
         "seed": int(metaseed),
     }
 
-    # Allocate Unity ports up front; reused across stages.
     alloc_kwargs = {"n_envs": n_envs}
     if base_port is not None:
         alloc_kwargs["base_port"] = base_port
     unity_instances = allocate_unity_instances(**alloc_kwargs)
     unity_ports = [inst.port for inst in unity_instances]
     print(f"[dreamerv3] n_envs={n_envs}, unity_ports={unity_ports}")
+    print(f"[dreamerv3] exp={exp.exp_id} variation={variation_name}")
 
     # Cumulative step target across stages — embodied.run.train uses an
     # absolute step counter, so stage N trains from sum(stages[:N]) to
-    # sum(stages[:N+1]).  The agent checkpoint + replay buffer persist
-    # across calls because the logdir is the same.
+    # sum(stages[:N+1]). The agent checkpoint + replay persist across calls
+    # because the logdir is the same.
     cumulative_steps = 0
 
-    for stage_idx, stage in enumerate(stages):
-        stage_steps = int(stage["steps"] * step_multiplier)
+    for stage_idx, stage in enumerate(exp.stages):
+        stage_steps = int(stage.steps * step_multiplier)
         cumulative_steps += stage_steps
 
+        if stage_idx < start_stage or stage_idx >= end_stage:
+            continue
+
+        world_preset_list = resolve_stage_world(stage, variation, exp)
         print(f"\n{'='*60}")
-        print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)}: "
-              f"{stage.get('world_presets', ['?'])}")
+        print(f"[dreamerv3] Stage {stage_idx + 1}/{n_stages}: world={world_preset_list}")
         print(f"[dreamerv3] Stage steps: {stage_steps}  |  "
               f"Cumulative target: {cumulative_steps}")
         print(f"{'='*60}")
 
-        # Skip stages already completed in a prior run. embodied.run.train uses
-        # an absolute step counter, so re-entering a completed stage would load
-        # the checkpoint, exit immediately (target already reached), and
-        # overwrite the snapshot with itself — wasting time setting up the env,
-        # agent and JAX compilation on each pass.
-        stage_snapshot = ckpt_dir / f"stage_{stage_idx}"
-        if stage_snapshot.exists():
-            print(f"[dreamerv3] Snapshot exists at {stage_snapshot}; "
-                  f"stage already complete, skipping.")
+        stage_done = ckpt_dir / f"stage_{stage_idx}.done"
+        if stage_done.exists():
+            print(f"[dreamerv3] {stage_done} exists; stage already complete, skipping.")
             continue
 
         with open(results_dir / "run_config.json", "w") as f:
             json.dump({
-                "rundef": rundef_stem,
+                "exp_id": exp.exp_id,
+                "exp_def": str(exp.source),
+                "variation": variation_name,
                 "method": "dreamerv3",
                 "size": size,
                 "step_multiplier": step_multiplier,
@@ -360,9 +366,9 @@ def main():
         stage_run_metadata = {**base_run_metadata, "stage_idx": stage_idx}
 
         embodied.run.train(
-            bind(make_agent, config, rundef, stage, metaseed, unity_ports),
+            bind(make_agent, config, exp, variation, stage, metaseed, unity_ports),
             bind(make_replay, config, "replay"),
-            bind(make_env, config, rundef, stage, metaseed,
+            bind(make_env, config, exp, variation, stage, metaseed,
                  episode_log_path=episode_log_path,
                  run_metadata=stage_run_metadata,
                  unity_ports=unity_ports),
@@ -372,11 +378,20 @@ def main():
         )
 
         snapshot_latest_ckpt(logdir, ckpt_dir / f"stage_{stage_idx}")
-        print(f"[dreamerv3] Stage {stage_idx + 1}/{len(stages)} complete.")
+        (ckpt_dir / f"stage_{stage_idx}.done").touch()
+        print(f"[dreamerv3] Stage {stage_idx + 1}/{n_stages} complete.")
 
-    snapshot_latest_ckpt(logdir, ckpt_dir / "final")
-    (results_dir / "DONE").touch()
-    print(f"\n[dreamerv3] All {len(stages)} stages complete. Logdir: {logdir}")
+    all_stages_done = all(
+        (ckpt_dir / f"stage_{i}.done").exists() for i in range(n_stages)
+    )
+    if all_stages_done:
+        snapshot_latest_ckpt(logdir, ckpt_dir / "final")
+        (results_dir / "DONE").touch()
+        print(f"\n[dreamerv3] All {n_stages} stages complete. Logdir: {logdir}")
+    else:
+        completed = [i for i in range(n_stages)
+                     if (ckpt_dir / f"stage_{i}.done").exists()]
+        print(f"\n[dreamerv3] Partial run: stages done = {completed} / {n_stages}")
 
 
 if __name__ == "__main__":

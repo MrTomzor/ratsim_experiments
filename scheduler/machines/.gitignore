@@ -1,0 +1,6 @@
+# Track the canonical machine configs; ignore any extras the user adds locally.
+*
+!.gitignore
+!default.yaml
+!gpu_example.yaml
+!README.md

@@ -1,0 +1,39 @@
+# Does LSTM BPTT length matter — even when episodes fit in the longest window?
+#
+# Hypothesis: even with full-episode BPTT (n_steps≥episode_max_steps), the LSTM
+# can't solve memory-demanding tasks. If true, that's evidence the bottleneck
+# is the LSTM itself, not its training horizon.
+#
+# Three variations vary `n_steps` (= rollout length = BPTT window in SB3
+# RecurrentPPO). The `balanced` recurrent_preset normally clamps n_steps=512
+# and is overridden here. batch_size = n_steps so each minibatch is one full
+# unroll.
+#
+# Cardinality: 3 variations × 1 method × 2 seeds = 6 runs.
+
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_default
+
+total_steps: 10_000_000
+n_stages: 10
+mode: bfs
+
+methods:
+  - name: recurrent_ppo
+
+seeds: 2
+
+variations:
+  - name: bptt_64
+    method_args:
+      n_steps: 64
+      batch_size: 64
+  - name: bptt_512
+    method_args:
+      n_steps: 512
+      batch_size: 512
+  - name: bptt_2048             # full-episode unroll (episode_max_steps=2000)
+    method_args:
+      n_steps: 2048
+      batch_size: 2048

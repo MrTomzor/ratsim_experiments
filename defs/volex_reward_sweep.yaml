@@ -1,0 +1,38 @@
+# How sensitive is training to the volumetric-exploration reward magnitude?
+#
+# Three variations: zero (no exploration shaping), baseline (the value in
+# volumetric_exploration_2000_collision_penalty.yaml = 0.01), and double (0.02).
+#
+# Each variation composes the baseline task preset with a tiny overlay file
+# that only respecifies `volumetric_exploration_settings:`. Because the config
+# blender does shallow top-level merge, the overlay must contain the FULL
+# `volumetric_exploration_settings:` dict, but everything else (foraging,
+# collision, termination) is inherited from the baseline.
+#
+# Cardinality: 3 variations × 2 methods × 2 seeds = 12 runs.
+
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_default
+
+total_steps: 10_000_000
+n_stages: 10
+mode: bfs
+
+methods:
+  - name: ppo
+  - name: dreamer
+
+seeds: 2
+
+variations:
+  - name: baseline
+    # uses experiment-level task_preset (= reward_per_m2 0.01)
+  - name: zero
+    task_preset:
+      - volumetric_exploration_2000_collision_penalty
+      - volex_zero_overlay         # MISSING — see scheduler/README.md
+  - name: double
+    task_preset:
+      - volumetric_exploration_2000_collision_penalty
+      - volex_double_overlay       # MISSING — see scheduler/README.md

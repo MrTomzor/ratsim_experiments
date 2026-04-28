@@ -1,0 +1,32 @@
+# GPU-box machine config — one GPU, multiple cores.
+#
+# Activate via:
+#   python -m scheduler.scheduler run <batch> --machine gpu_example
+# or via shell:
+#   export RATSIM_SCHEDULER_MACHINE=gpu_example
+#
+# recurrent_ppo and dreamer both contend for the single gpu slot, so at most
+# one of them runs at a time. Plain PPO can still run alongside the GPU job.
+
+resources:
+  gpu: 1
+  cpu_slot: 6
+
+method_profiles:
+  ppo:
+    needs:
+      cpu_slot: 1
+    args:
+      method.device: cpu
+
+  recurrent_ppo:
+    needs:
+      gpu: 1
+    args:
+      method.device: cuda
+
+  dreamer:
+    needs:
+      gpu: 1
+    args:
+      method.jax.platform: cuda
