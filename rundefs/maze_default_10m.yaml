@@ -1,0 +1,45 @@
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+# reset_on_stage_change: true  # reinit critic + optimizer at stage transitions
+
+stages:
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
+  - world_presets: [maze_default]
+    steps: 500_000
