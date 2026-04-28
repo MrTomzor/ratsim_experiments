@@ -10,7 +10,7 @@ agent_preset: sphereagent_2d_lidar
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: empty_box_130_houses
 
-total_steps: 10_000_000
+total_steps: 3_000_000
 n_stages: 10
 mode: bfs
 
