@@ -99,6 +99,12 @@ class ActiveJob:
     # logic uses this to skip the consecutive-failure increment so dreamer-
     # style runs that need many restarts don't get blocked.
     ram_killed: bool = False
+    # True if this job got the PortAllocator's persistent slot (port 9000)
+    # instead of a fresh 9100+ window. Build_command omits base_port= for
+    # such jobs so train.py's allocate_unity_instances takes the
+    # attach-to-9000 path; release() routing on the allocator also depends
+    # on this.
+    is_persistent: bool = False
 
 
 class ResourceManager:
@@ -340,6 +346,59 @@ def aggregate_fps_by_method(runs: list[Run], recent_window: int = 50) -> dict[st
     return out
 
 
+def aggregate_per_job_heartbeat(in_flight: list[dict], runs: list[Run],
+                                 exp_dir: Path,
+                                 recent_window: int = 20) -> dict[tuple[str, int], dict]:
+    """For each in-flight (run_id, stage_idx), measure recency + throughput
+    from `train_episodes.jsonl`. Designed to surface stalled jobs in the
+    status display — env-step rate alone misses "process is alive but not
+    completing episodes" failures.
+
+    Returns {(run_id, stage_idx): {last_ep_age_s, fps_recent, n_eps_stage,
+    log_age_s}}. log_age_s is the mtime of the active scheduler log file
+    (catches stalls within an episode, not just between them)."""
+    run_dir_by_id = {r.run_id: r.run_dir for r in runs}
+    out: dict[tuple[str, int], dict] = {}
+    now = time.time()
+    for entry in in_flight:
+        run_id = entry["run_id"]
+        stage_idx = int(entry["stage_idx"])
+        run_dir = run_dir_by_id.get(run_id)
+        if run_dir is None:
+            continue
+        jsonl = run_dir / "train_episodes.jsonl"
+        last_ep_age = None
+        if jsonl.exists():
+            last_ep_age = now - jsonl.stat().st_mtime
+
+        records = _read_jsonl_episode_records(jsonl)
+        stage_eps = [r for r in records if r["stage_idx"] == stage_idx]
+        recent = stage_eps[-recent_window:]
+        recent_steps = sum(r["steps"] for r in recent)
+        recent_wall = sum(r["wall_time_s"] for r in recent)
+        fps_recent = (recent_steps / recent_wall) if recent_wall > 0 else None
+
+        # log_age catches in-episode stalls — JSONL only updates on
+        # terminate/truncate, but train.py's TaskTracker prints periodic
+        # debug lines as it steps, so the log file mtime moves whenever
+        # the env is still actually stepping.
+        log_age = None
+        log_path = entry.get("log_path")
+        if log_path:
+            try:
+                log_age = now - (exp_dir / log_path).stat().st_mtime
+            except OSError:
+                pass
+
+        out[(run_id, stage_idx)] = {
+            "last_ep_age_s": last_ep_age,
+            "log_age_s": log_age,
+            "fps_recent": fps_recent,
+            "n_eps_stage": len(stage_eps),
+        }
+    return out
+
+
 def aggregate_perf_by_stage(runs: list[Run], recent_window: int = 50
                             ) -> dict[tuple[str, str, int], dict]:
     """Per (variation, method, stage_idx): mean total_score and objects_found
@@ -475,7 +534,8 @@ def pick_candidates(runs: list[Run], n_stages: int, mode: str,
 
 def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
                   port_base: int, exp: cfg.ExperimentDef,
-                  step_multiplier: float) -> list[str]:
+                  step_multiplier: float,
+                  is_persistent: bool = False) -> list[str]:
     python = cfg.resolve_python(run.method, profile)
     train_script = cfg.resolve_train_script(run.method, profile)
 
@@ -491,9 +551,14 @@ def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
         f"end_stage={stage_idx + 1}",
         f"step_multiplier={step_multiplier}",
         f"metaseed={run.seed}",
-        f"base_port={port_base}",
         f"n_envs={profile.n_envs}",
     ]
+    # When the job is on the persistent slot, omit base_port — train.py's
+    # allocate_unity_instances(n_envs=1) without a base_port hits the
+    # "attach to PERSISTENT_PORT (9000) if alive, else spawn fresh on 9000"
+    # path, which is exactly what we want.
+    if not is_persistent:
+        cmd.append(f"base_port={port_base}")
     if train_script in cfg.SCRIPTS_NEEDING_METHOD_ARG:
         cmd.append(f"method={run.method.name}")
 
@@ -515,14 +580,17 @@ def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
 
 def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
               port_base: int, exp: cfg.ExperimentDef,
-              step_multiplier: float) -> ActiveJob:
-    cmd = build_command(run, stage_idx, profile, port_base, exp, step_multiplier)
+              step_multiplier: float,
+              is_persistent: bool = False) -> ActiveJob:
+    cmd = build_command(run, stage_idx, profile, port_base, exp, step_multiplier,
+                        is_persistent=is_persistent)
     log_dir = run.run_dir / "scheduler_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"stage_{stage_idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
+    port_label = f"{port_base} (persistent)" if is_persistent else str(port_base)
     print(f"[scheduler] dispatch {run.run_id} stage {stage_idx} "
-          f"port={port_base} n_envs={profile.n_envs}")
+          f"port={port_label} n_envs={profile.n_envs}")
     print(f"[scheduler]   log: {log_path}")
     print(f"[scheduler]   cmd: {' '.join(cmd)}")
 
@@ -539,7 +607,21 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
     return ActiveJob(
         run=run, stage_idx=stage_idx, popen=popen, port_base=port_base,
         profile=profile, started_at=datetime.now(), log_path=log_path,
+        is_persistent=is_persistent,
     )
+
+
+def _is_unity_alive(port: int, host: str = "127.0.0.1",
+                    timeout: float = 0.5) -> bool:
+    """Quick TCP probe — true if something accepts on this port. Used to
+    check whether a manually-launched Unity is listening on the persistent
+    slot before the scheduler hands it to a job."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +690,14 @@ def cmd_run(args):
           f"{sum(m.n_seeds for m in exp.methods)} method-seeds)")
 
     rm = ResourceManager(machine.resources)
-    port_alloc = PortAllocator(start=9100, window_size=10)
+    use_port_9000 = bool(getattr(args, "use_port_9000", False))
+    port_alloc = PortAllocator(start=9100, window_size=10,
+                               persistent_port=9000 if use_port_9000 else None)
+    if use_port_9000:
+        print(f"[scheduler] --use-port-9000 enabled: port 9000 will be "
+              f"handed to one n_envs=1 dispatch when Unity is alive there. "
+              f"Manually launch Unity on 9000 (e.g. start_ratsim_headless.sh) "
+              f"to watch one training instance.")
     active: list[ActiveJob] = []
     shutdown = {"requested": False}
 
@@ -735,8 +824,21 @@ def cmd_run(args):
             profile = machine.method_profiles[run.method.name]
             if not rm.can_allocate(profile.needs):
                 continue
-            port_base = port_alloc.alloc()
-            job = spawn_job(run, stage_idx, profile, port_base, exp, step_multiplier)
+            # Prefer the persistent slot (port 9000) for n_envs=1 dispatches
+            # when the user has opted in AND Unity is actually alive there.
+            # Falls back to a fresh 9100+ window otherwise.
+            port_base = None
+            is_persistent = False
+            if use_port_9000 and profile.n_envs == 1:
+                if _is_unity_alive(9000):
+                    cand = port_alloc.try_alloc_persistent()
+                    if cand is not None:
+                        port_base = cand
+                        is_persistent = True
+            if port_base is None:
+                port_base = port_alloc.alloc()
+            job = spawn_job(run, stage_idx, profile, port_base, exp,
+                            step_multiplier, is_persistent=is_persistent)
             rm.allocate(profile.needs)
             active.append(job)
             in_flight.add((run.run_id, stage_idx))
@@ -810,12 +912,43 @@ def cmd_status(args):
 
     in_flight = state.get("running", [])
     if in_flight:
+        heartbeat = aggregate_per_job_heartbeat(in_flight, runs, exp_dir)
         print(f"\nIn flight ({len(in_flight)}):")
         for e in in_flight:
             alive = "alive" if pid_alive(e["pid"]) else "DEAD"
             print(f"  {e['run_id']} stage {e['stage_idx']}  "
                   f"pid={e['pid']} ({alive})  port={e.get('port_base')}  "
                   f"started={e.get('started_at')}")
+            hb = heartbeat.get((e["run_id"], int(e["stage_idx"])), {})
+            # Two age signals:
+            #   log_age = mtime of train.py's stdout log; bumps on every
+            #             TaskTracker debug print, so even mid-episode the
+            #             log moves while the env is still stepping.
+            #   ep_age = mtime of train_episodes.jsonl; only bumps on
+            #            episode terminate/truncate.
+            # log_age stuck while ep_age is "young-ish" is normal (mid-ep).
+            # log_age AND ep_age both stuck > 5 min = stalled.
+            log_age = hb.get("log_age_s")
+            ep_age = hb.get("last_ep_age_s")
+            fps_recent = hb.get("fps_recent")
+            n_eps_stage = hb.get("n_eps_stage", 0)
+
+            stalled = (log_age is not None and log_age > 300
+                       and (ep_age is None or ep_age > 300))
+            tag = "  ⚠ STALLED" if stalled else ""
+
+            parts = []
+            if n_eps_stage > 0:
+                parts.append(f"{n_eps_stage} eps this stage")
+            if fps_recent is not None:
+                parts.append(f"recent fps: {fps_recent:.1f}")
+            if ep_age is not None:
+                parts.append(f"last ep: {_format_elapsed(ep_age)} ago")
+            else:
+                parts.append("no episodes yet")
+            if log_age is not None:
+                parts.append(f"log: {_format_elapsed(log_age)} ago")
+            print(f"    {' · '.join(parts)}{tag}")
 
     compact = bool(getattr(args, "compact", False))
 
@@ -930,6 +1063,14 @@ def main():
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "
              "(equivalent to rm -rf + run). Default behavior is to resume.")
+    p_run.add_argument(
+        "--use-port-9000", action="store_true", dest="use_port_9000",
+        help="Also consider port 9000 as a single-slot port for one n_envs=1 "
+             "dispatch at a time. The slot is only used when Unity is "
+             "actually alive on 9000 (TCP probe at dispatch time). Useful "
+             "for manually launching a Unity GUI on 9000 and watching one "
+             "training instance live; other dispatches still go to 9100+ "
+             "as usual.")
     p_run.set_defaults(func=cmd_run)
 
     p_st = sub.add_parser("status", help="Show experiment status")

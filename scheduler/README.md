@@ -294,6 +294,32 @@ This means **`RATSIM_UNITY_BIN` must be set** for any scheduler-driven run
 (otherwise auto-spawn fails). Manual `start_ratsim_headless.sh` is only for
 attaching to a single interactive run.
 
+### Watching one training instance live (`--use-port-9000`)
+
+Pass `--use-port-9000` to opt port 9000 into the allocator as a single-slot
+port for one n_envs=1 dispatch at a time:
+
+```bash
+# 1. Manually launch Unity on 9000 (with the headless display setup so you
+#    can VNC into :99 and toggle the camera to follow the agent)
+./start_ratsim_headless.sh /path/to/build
+
+# 2. Run the scheduler with the flag
+python scheduler_run.py method_compare --use-port-9000
+```
+
+Behavior:
+- The slot is only handed out to **n_envs=1** dispatches and only when
+  Unity is **actually alive on 9000** (TCP probe at dispatch time). If
+  Unity isn't running there yet, the scheduler dispatches to 9100+ as
+  usual; start Unity and the next eligible dispatch will pick up the slot.
+- At most one job uses the slot at a time. Other parallel jobs (including
+  multi-env ones) still allocate fresh 9100+ windows.
+- The dispatched job's `train.py` gets no `base_port=` arg, so its
+  `allocate_unity_instances(n_envs=1)` call falls through to the
+  attach-or-spawn-on-9000 path — attaching to your manually-launched
+  instance.
+
 ## Cleaning up zombie Unity processes
 
 If the scheduler dies ungracefully (kernel OOM-kill, SIGKILL, terminal

@@ -20,7 +20,9 @@ Walks `<exp_dir>/runs/<variation>__<method>__seed<i>/`, loads each
 
 `eval_episodes.jsonl` is the cache: re-run this script without `--run-eval`
 and it just re-reads whatever's on disk. Run with `--run-eval N` to (re)write
-those files (separate dispatch path, not implemented in this script alone).
+those files — one subprocess per run in the method's venv (the same env-var
+convention the scheduler uses: $PPO_PYTHON_PATH / $DREAMER_PYTHON_PATH).
+Dreamer eval is not yet implemented; those runs are skipped with a warning.
 
 Output dir defaults to `<exp_dir>/analysis/` (or pass `--out`). Run from the
 sb3 venv (needs pandas + matplotlib).
@@ -28,6 +30,8 @@ sb3 venv (needs pandas + matplotlib).
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -42,6 +46,7 @@ import pandas as pd  # noqa: E402
 
 REPO_ROOT = Path(__file__).parent
 EXP_ROOT = REPO_ROOT / "results" / "experiments"
+EVAL_SCRIPT = REPO_ROOT / "eval_one_run.py"
 
 # Metrics we plot from train + eval JSONLs. Always present in the schema
 # (see env.py's _log_episode_jsonl and test.py's make_episode_result).
@@ -251,6 +256,71 @@ def plot_eval_bar(runs: list[dict], metric: str, out_dir: Path) -> None:
     print(f"  -> {out_path}")
 
 
+# -- Eval dispatch ---------------------------------------------------------
+
+def python_for_method(method_name: str) -> str:
+    """Look up the python interpreter for a method via the same env-var
+    convention the scheduler uses ($PPO_PYTHON_PATH / $DREAMER_PYTHON_PATH).
+    Imported lazily so plot-only runs don't drag in scheduler config."""
+    from scheduler.config import DEFAULT_PYTHON_ENV
+    var = DEFAULT_PYTHON_ENV.get(method_name)
+    if var is None:
+        raise ValueError(
+            f"no python_env mapping for method '{method_name}' in "
+            f"scheduler/config.py:DEFAULT_PYTHON_ENV.")
+    val = os.environ.get(var)
+    if not val:
+        raise EnvironmentError(
+            f"env var ${var} (python for method '{method_name}') is unset. "
+            f"Add `export {var}=...` to your shell rc.")
+    return val
+
+
+def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
+                      deterministic: bool = False,
+                      eval_metaseed: int = 42) -> None:
+    """Sequentially shell out to eval_one_run.py for each run in its method's
+    venv. Subprocess inherits stdout/stderr so per-episode progress streams
+    live. Failures are reported but don't abort the loop — other runs still
+    get a shot."""
+    succeeded, skipped, failed = [], [], []
+    for r in runs:
+        method = r["method"]
+        if method == "dreamer":
+            print(f"\n[eval] SKIP {r['run_id']}: dreamer eval not yet "
+                  f"implemented (needs the dreamer venv + embodied loader).")
+            skipped.append(r["run_id"])
+            continue
+        try:
+            python = python_for_method(method)
+        except (ValueError, EnvironmentError) as e:
+            print(f"\n[eval] SKIP {r['run_id']}: {e}")
+            skipped.append(r["run_id"])
+            continue
+        cmd = [python, str(EVAL_SCRIPT),
+               "--run_dir", str(r["run_dir"]),
+               "--exp_dir", str(exp_dir),
+               "--n_episodes", str(n_episodes),
+               "--eval_metaseed", str(eval_metaseed)]
+        if deterministic:
+            cmd.append("--deterministic")
+        print(f"\n[eval] === {r['run_id']} ===")
+        print(f"[eval] cmd: {' '.join(cmd)}")
+        rc = subprocess.run(cmd).returncode
+        if rc == 0:
+            succeeded.append(r["run_id"])
+        else:
+            print(f"[eval] FAILED (exit={rc})")
+            failed.append(r["run_id"])
+
+    print(f"\n[eval] Summary: ok={len(succeeded)}  failed={len(failed)}  "
+          f"skipped={len(skipped)}")
+    if failed:
+        print(f"  failed: {failed}")
+    if skipped:
+        print(f"  skipped: {skipped}")
+
+
 # -- Summary table ---------------------------------------------------------
 
 def print_summary(runs: list[dict]) -> None:
@@ -285,7 +355,27 @@ def main() -> None:
     ap.add_argument("--rolling", type=int, default=50,
                     help="Rolling window for training curves, in episodes "
                          "(default: 50)")
+    ap.add_argument("--run-eval", type=int, default=None, metavar="N",
+                    dest="run_eval",
+                    help="Before plotting, run N eval episodes per run on "
+                         "the latest checkpoint. Spawns one subprocess per "
+                         "run in the method's venv; overwrites any existing "
+                         "eval_episodes.jsonl. Re-running without this flag "
+                         "just re-plots from the cached JSONLs.")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="Pass --deterministic to eval_one_run.py "
+                         "(default is stochastic, which matches training-time "
+                         "behaviour). Only meaningful with --run-eval.")
+    ap.add_argument("--eval-metaseed", type=int, default=42, dest="eval_metaseed",
+                    help="World-generation metaseed for eval (default 42). "
+                         "All runs in the experiment evaluate on the same "
+                         "world sequence drawn from this seed; pass the same "
+                         "value to a human-control session to reproduce. Only "
+                         "meaningful with --run-eval.")
     args = ap.parse_args()
+
+    if args.run_eval is not None and args.run_eval < 1:
+        ap.error("--run-eval N requires N >= 1")
 
     exp_dir = resolve_exp_dir(args.exp)
     print(f"Experiment dir: {exp_dir}")
@@ -295,9 +385,22 @@ def main() -> None:
         print("ERROR: no runs found under runs/.")
         sys.exit(1)
 
+    if args.run_eval is not None:
+        mode = "deterministic" if args.deterministic else "stochastic"
+        print(f"\nRunning {args.run_eval} {mode} eval episode(s) per run "
+              f"(eval_metaseed={args.eval_metaseed}, sequential, may take a while)...")
+        run_eval_for_runs(runs, exp_dir, args.run_eval,
+                          deterministic=args.deterministic,
+                          eval_metaseed=args.eval_metaseed)
+        # Re-discover so newly written eval_episodes.jsonl files are picked up.
+        runs = discover_runs(exp_dir)
+    elif args.deterministic:
+        print("[analyze] WARN: --deterministic only takes effect with --run-eval; "
+              "ignoring.")
+
     n_train = sum(1 for r in runs if r["train_df"] is not None)
     n_eval = sum(1 for r in runs if r["eval_df"] is not None)
-    print(f"Found {len(runs)} run(s): {n_train} with train data, "
+    print(f"\nFound {len(runs)} run(s): {n_train} with train data, "
           f"{n_eval} with eval data.\n")
     print_summary(runs)
 

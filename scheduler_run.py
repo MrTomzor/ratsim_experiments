@@ -32,6 +32,13 @@ def main():
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "
              "(equivalent to rm -rf + run). Default behavior is to resume.")
+    p.add_argument(
+        "--use-port-9000", action="store_true", dest="use_port_9000",
+        help="Also consider port 9000 for one n_envs=1 dispatch at a time, "
+             "but only when Unity is alive on 9000 (TCP probe at dispatch "
+             "time). Useful for manually launching a Unity GUI on 9000 and "
+             "watching one training instance live; other dispatches still "
+             "go to 9100+ as usual.")
     cmd_run(p.parse_args())
 
 

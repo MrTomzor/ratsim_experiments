@@ -1,0 +1,13 @@
+agent_preset: sphereagent_2d_fullsar
+task_preset: low_volumetric_exploration_2000_collision_penalty
+world_preset: default
+
+total_steps: 3_000_000
+n_stages: 10
+mode: bfs
+
+methods:
+  - name: ppo
+  # - name: dreamer
+
+seeds: 3
