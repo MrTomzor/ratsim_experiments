@@ -213,7 +213,9 @@ Train and test scripts get their Unity ports from
   instance); `n_envs>1` always allocates fresh on ports 9100+. Spawned
   instances die with the parent Python process (via `atexit`); SIGKILL or
   power loss leaves orphans — clean them up with
-  `./scripts/stop_ratsim_headless.sh --all`.
+  `./scripts/stop_ratsim_headless.sh --all` (well-behaved case, uses
+  pidfiles) or `./kill_all_unity.sh` (sledgehammer; matches by command-line
+  pattern, doesn't trust pidfiles, and also accepts `-9` for SIGKILL).
 
 See `ratsim/CLAUDE.md` for the full launcher contract.
 

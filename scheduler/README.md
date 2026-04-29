@@ -15,11 +15,11 @@ export DREAMER_PYTHON_PATH=/home/tom/ratvenv/dreamer_venv/bin/python
 
 # 1. browse the example experiment defs
 ls defs/
-#   bptt_length.yaml
-#   gps_ablation.yaml
-#   method_compare.yaml
-#   openfield_to_houses_curriculum.yaml
-#   volex_reward_sweep.yaml
+#   bptt_length.yaml                       gps_ablation_5house.yaml
+#   compare_5houses.yaml                   gps_ablation_maze_default.yaml
+#   compare_loopymaze.yaml                 method_compare.yaml
+#   dreamers_maze_smoke.yaml               openfield_to_houses_curriculum.yaml
+#   smoke_test.yaml                        volex_reward_sweep.yaml
 
 # 2. run / resume — uses scheduler/machines/default.yaml (CPU only)
 cd ratsim_experiments
@@ -33,8 +33,13 @@ export RATSIM_SCHEDULER_MACHINE=gpu_example
 # 2c. smoke test: 1% of all step counts
 python scheduler_run.py method_compare --step-multiplier 0.01
 
+# 2d. wipe and start fresh (instead of resuming)
+python scheduler_run.py method_compare --restart
+
 # 3. status, in another terminal
-python scheduler_status.py method_compare
+python scheduler_status.py method_compare              # one-shot
+python scheduler_status.py method_compare --watch      # live, refresh every 2s
+python scheduler_status.py method_compare --watch 5    # refresh every 5s
 ```
 
 The `run` command is idempotent: stop it (Ctrl-C), restart with the same
@@ -289,11 +294,32 @@ This means **`RATSIM_UNITY_BIN` must be set** for any scheduler-driven run
 (otherwise auto-spawn fails). Manual `start_ratsim_headless.sh` is only for
 attaching to a single interactive run.
 
+## Cleaning up zombie Unity processes
+
+If the scheduler dies ungracefully (kernel OOM-kill, SIGKILL, terminal
+closed without Ctrl-C), Unity children may outlive it. Symptoms: `state.json`
+lists pids that are dead but Unity is still pinning ports / RAM, or the next
+scheduler run can't bind its port window.
+
+```bash
+./kill_all_unity.sh              # SIGTERM matches; basename of $RATSIM_UNITY_BIN or 'SARBench'
+./kill_all_unity.sh -9           # SIGKILL (use if SIGTERM didn't take)
+./kill_all_unity.sh -p MyBuild   # custom command-line pattern
+./kill_all_unity.sh -n           # dry-run — show what would be killed
+```
+
+Matches by command-line pattern (so it catches both the Unity binary and
+its `start_ratsim_headless.sh` launcher) and cleans up stale `/tmp/ratsim_*.pid`
+files for already-dead pids. For the well-behaved single-instance case use
+`stop_ratsim_headless.sh --all` instead.
+
 ## CLI reference
 
 ```
-python scheduler_run.py    <exp_id_or_path> [--machine <name|path>] [--step-multiplier <x>]
-python scheduler_status.py <exp_id_or_path>
+python scheduler_run.py    <exp_id_or_path> [--machine <name|path>]
+                                            [--step-multiplier <x>]
+                                            [--restart]
+python scheduler_status.py <exp_id_or_path> [--watch [SECONDS]] [--compact]
 ```
 
 `<exp_id_or_path>` accepts either a path (absolute or relative) or a bare
@@ -301,17 +327,55 @@ exp_id (resolved against `defs/<id>.yaml`). For tab-completion in the shell,
 type the path form: `python scheduler_run.py defs/met<TAB>` →
 `python scheduler_run.py defs/method_compare.yaml`.
 
-`--machine` falls back to `$RATSIM_SCHEDULER_MACHINE` if unset, and to
-`default.yaml` if both are unset. `--step-multiplier` overrides the def's
-`step_multiplier:` (default 1.0) — use 0.01 for smoke tests, but note that
-resuming with a different multiplier than the original is a footgun: resumed
-stages target the new step counts but load checkpoints trained at the old
-counts.
+**`run` flags:**
+- `--machine` falls back to `$RATSIM_SCHEDULER_MACHINE` if unset, and to
+  `default.yaml` if both are unset.
+- `--step-multiplier` overrides the def's `step_multiplier:` (default 1.0)
+  — use 0.01 for smoke tests, but note that resuming with a different
+  multiplier than the original is a footgun: resumed stages target the new
+  step counts but load checkpoints trained at the old counts.
+- `--restart` wipes `results/experiments/<exp_id>/` before starting,
+  equivalent to `rm -rf` + run. Default is to resume from `.done` markers.
+
+**`status` flags:**
+- `--watch [SECONDS]` clears the screen and re-prints status every SECONDS
+  (default 2). Auto-enables `--compact`. Ctrl-C to exit.
+- `--compact` hides the failed-runs list (the list pollutes the screen on
+  every refresh in watch mode). One-shot mode shows the last 10 failures
+  with log paths so you can scroll back.
 
 Equivalent module-style invocations:
 `python -m scheduler.scheduler run <exp>` and
 `python -m scheduler.scheduler status <exp>`. The two wrapper scripts are
-just thin shims that skip the `run` / `status` subcommand.
+just thin shims that skip the `run` / `status` subcommand. `--watch` is only
+on the wrapper (`scheduler_status.py`); the module form is one-shot.
+
+## Status output
+
+`scheduler_status.py` reads `state.json` + `.done` markers + each run's
+`train_episodes.jsonl` and prints, in order:
+
+1. **Header**: exp_id, source, n_stages, mode, step_multiplier, started-at,
+   last-activity-at (with relative `(Xm ago)` for the last dispatch/reap).
+2. **Per-run progress bar**: one row per `<variation>__<method>__seed<i>`,
+   with stage-completion as `███···` blocks, `✓` once all stages are done.
+3. **In flight**: pids, port_base, started-at for any currently-running
+   stages. `alive` / `DEAD` based on `kill -0` to the pid.
+4. **Failed**: count + (last 10 with log paths in non-compact mode).
+5. **FPS by method**: cumulative env-step rate + a rolling "recent fps"
+   over the last ~50 episodes per method, total steps, elapsed wall-time,
+   episode count, and contributing run count. Drops slowdowns from
+   per-stage averaging — if recent fps drifts much below cumulative, the
+   box is degrading (renderer fell back, RAM pressure, etc.).
+6. **Per-stage performance tables** — reward + pickups, columns are stages
+   (with cumulative end-step labels), rows are `(variation, method)` or
+   just `method` if there's only one variation. Each cell is `mean (n_seeds)`
+   over the last ~50 episodes per seed. Only stages where at least one seed
+   has data are shown.
+
+The FPS / perf tables use only `train_episodes.jsonl`, written by the env
+on episode terminate/truncate. Smoke runs with stage_steps < episode_max_steps
+may produce zero rows — that's expected, not a logging bug.
 
 ## Required presets for the example defs
 
