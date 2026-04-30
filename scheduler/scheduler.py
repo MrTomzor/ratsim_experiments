@@ -827,14 +827,22 @@ def cmd_run(args):
             # Prefer the persistent slot (port 9000) for n_envs=1 dispatches
             # when the user has opted in AND Unity is actually alive there.
             # Falls back to a fresh 9100+ window otherwise.
+            #
+            # IMPORTANT: gate the TCP alive-probe on `persistent_in_use` first.
+            # While an active job is on port 9000, opening extra TCP connections
+            # to it (which is what _is_unity_alive does) disrupts the active
+            # client's session — Unity's connector wasn't built for stray
+            # parallel clients. The previous version probed on every candidate
+            # every poll, which wedged the in-flight job after a few minutes.
             port_base = None
             is_persistent = False
-            if use_port_9000 and profile.n_envs == 1:
-                if _is_unity_alive(9000):
-                    cand = port_alloc.try_alloc_persistent()
-                    if cand is not None:
-                        port_base = cand
-                        is_persistent = True
+            if (use_port_9000 and profile.n_envs == 1
+                    and not port_alloc.persistent_in_use
+                    and _is_unity_alive(9000)):
+                cand = port_alloc.try_alloc_persistent()
+                if cand is not None:
+                    port_base = cand
+                    is_persistent = True
             if port_base is None:
                 port_base = port_alloc.alloc()
             job = spawn_job(run, stage_idx, profile, port_base, exp,
