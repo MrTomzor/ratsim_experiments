@@ -28,6 +28,7 @@ implicitly. `metaseed=N` controls the world-generation seed (random by default).
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -254,6 +255,61 @@ def reset_optimizer(model):
 
 
 # -- Callback -----------------------------------------------------------------
+
+class PhaseTimingCallback(BaseCallback):
+    """Splits wall-clock into rollout-collection vs optimization phases.
+
+    SB3's built-in ``time/fps`` lumps both into one number, so a slow
+    optimization phase (Python-loop LSTM in sb3_contrib RecurrentPPO with
+    long n_steps) is invisible against a Unity-bound rollout. This callback
+    measures each phase separately, prints per-iteration, and logs to TB.
+
+    `_on_rollout_start` fires BEFORE collect_rollouts; `_on_rollout_end`
+    fires AFTER collect_rollouts and BEFORE train(). The gap from
+    `_on_rollout_end` to the next `_on_rollout_start` is therefore
+    train() time. We force a CUDA sync at the boundary so async kernel
+    queues don't smear the timing.
+    """
+
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self._rollout_t0 = None
+        self._opt_t0 = None
+
+    def _on_training_start(self) -> None:
+        self._rollout_t0 = time.perf_counter()
+
+    def _on_rollout_end(self) -> None:
+        # Rollout just finished; train() is about to start.
+        if th.cuda.is_available():
+            th.cuda.synchronize()
+        now = time.perf_counter()
+        if self._rollout_t0 is not None:
+            dt = now - self._rollout_t0
+            n = self.model.n_steps * self.model.n_envs
+            self.logger.record("timing/rollout_seconds", dt)
+            self.logger.record("timing/rollout_fps", n / max(dt, 1e-9))
+            print(f"[TIMING] rollout: {dt:.2f}s  ({n/max(dt,1e-9):.0f} steps/s, n_steps={self.model.n_steps}, n_envs={self.model.n_envs})")
+        self._opt_t0 = now
+
+    def _on_rollout_start(self) -> None:
+        # Called after train() has returned; next rollout about to begin.
+        if th.cuda.is_available():
+            th.cuda.synchronize()
+        now = time.perf_counter()
+        if self._opt_t0 is not None:
+            dt = now - self._opt_t0
+            n_grad_steps = getattr(self.model, "n_epochs", 1) * max(
+                1, (self.model.n_steps * self.model.n_envs) // max(self.model.batch_size, 1)
+            )
+            self.logger.record("timing/opt_seconds", dt)
+            self.logger.record("timing/opt_seconds_per_grad_step", dt / max(n_grad_steps, 1))
+            print(f"[TIMING] opt:     {dt:.2f}s  (~{dt/max(n_grad_steps,1)*1000:.0f} ms/grad-step over ~{n_grad_steps} grad steps)")
+        self._rollout_t0 = now
+
+    def _on_step(self) -> bool:
+        return True
+
 
 class TrainingMetricsCallback(BaseCallback):
     """Logs custom metrics from the env to TensorBoard."""
@@ -515,7 +571,7 @@ def main():
 
         model.learn(
             total_timesteps=stage_steps,
-            callback=TrainingMetricsCallback(),
+            callback=[TrainingMetricsCallback(), PhaseTimingCallback()],
             reset_num_timesteps=is_stage_transition and reset_on_stage,
         )
         total_steps_trained += stage_steps
