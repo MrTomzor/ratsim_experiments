@@ -114,8 +114,31 @@ RECURRENT_PRESETS = {
         "n_epochs": 10,
         "policy_kwargs": {"lstm_hidden_size": 128, "n_lstm_layers": 1},
     },
+    # D) Deep-memory — full-episode BPTT + long-horizon credit assignment.
+    # For tasks where the policy must remember information from the start
+    # of a long episode (e.g. which houses it has already visited in a
+    # 2000-step foraging episode).
+    #   n_steps == episode_max_steps  → unbroken BPTT from step 0 to terminal
+    #   batch_size == n_steps         → each minibatch is one full env trajectory,
+    #                                    so gradients flow through the entire episode
+    #   n_epochs lower than full_episode (5 vs 15) — fewer passes over a small
+    #     number of long sequences avoids overfitting one rollout
+    #   gamma=0.999 → effective horizon ~1000 steps (0.99 was ~100, useless here)
+    #   lr lower (1e-4) — long-BPTT updates are noisier; helps stability
+    #   bigger LSTM (256) — capacity to actually retain per-house occupancy state
+    "deep_memory": {
+        "n_steps": "auto",
+        "batch_size": "auto",
+        "n_epochs": 5,
+        "learning_rate": 1e-4,
+        "gamma": 0.999,
+        "gae_lambda": 0.95,
+        "ent_coef": 0.01,
+        "max_grad_norm": 0.5,
+        "policy_kwargs": {"lstm_hidden_size": 256, "n_lstm_layers": 1},
+    },
 }
-RECURRENT_PRESET_DEFAULT = "balanced"
+RECURRENT_PRESET_DEFAULT = "deep_memory"
 
 
 def create_model(method_name: str, env, method_config: dict, tb_log_dir: str,
@@ -333,6 +356,11 @@ def main():
     # Stage range: [start_stage, end_stage). Defaults run all stages.
     start_stage = int(overrides.pop("start_stage", 0))
     end_stage_arg = overrides.pop("end_stage", None)
+    # Optional initial-weights checkpoint. Only applied when start_stage==0
+    # (start_stage>0 already auto-resumes from stage_{N-1}.zip in this run's
+    # checkpoint dir, which takes precedence). Useful for extending a finished
+    # inline run that has no further stages to advance into.
+    resume_from = overrides.pop("resume_from", None)
 
     # Random metaseed by default — non-benchmark runs want some seed variability
     # between invocations.
@@ -420,9 +448,21 @@ def main():
         if not prev_ckpt.exists():
             print(f"[train] ERROR: start_stage={start_stage} but {prev_ckpt} does not exist")
             sys.exit(1)
+        if resume_from is not None:
+            print(f"[train] WARNING: ignoring resume_from={resume_from}; "
+                  f"start_stage>0 takes precedence")
         sb3_class = METHODS[method_name]["sb3_class"]
         print(f"[train] Resuming from {prev_ckpt}")
         model = sb3_class.load(str(prev_ckpt), tensorboard_log=tb_log_dir)
+    elif resume_from is not None:
+        ckpt = Path(resume_from)
+        # SB3's model.save / model.load accepts the path with or without .zip
+        if not ckpt.exists() and not Path(str(ckpt) + ".zip").exists():
+            print(f"[train] ERROR: resume_from path '{ckpt}' does not exist")
+            sys.exit(1)
+        sb3_class = METHODS[method_name]["sb3_class"]
+        print(f"[train] Loading initial weights from {ckpt}")
+        model = sb3_class.load(str(ckpt), tensorboard_log=tb_log_dir)
 
     for stage_idx in range(start_stage, end_stage):
         stage = exp.stages[stage_idx]
