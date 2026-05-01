@@ -41,6 +41,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from sb3_contrib import RecurrentPPO
 
+# Apply the LSTM segmentation fast-path monkey-patch before any
+# RecurrentPPO model is constructed. Side-effecting import.
+import lstm_fastpath  # noqa: F401
+
 from ratsim.config_blender import blend_presets
 from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
