@@ -1,0 +1,62 @@
+# RecurrentPPO on the 130-houses memory task using hyperparameters
+# transplanted from the Memory Maze paper (Pašukonis et al., ICLR 2023, IMPALA
+# baseline) for the optimization config and Wijmans et al. ICLR 2023
+# ("Emergence of Maps in the Memories of Blind Navigation Agents", DD-PPO) for
+# the rollout length.
+#
+# Why these numbers (vs. the in-house `deep_memory` preset):
+#   - Memory Maze trained IMPALA-LSTM with sequence length 100 on 1000-4000
+#     step episodes. They explicitly do NOT do full-episode BPTT — long-term
+#     memory comes from carrying the LSTM hidden state forward across short
+#     rollouts. We adopt their gamma=0.997, entropy=1e-3, lr=2e-4,
+#     lstm_hidden_size=256 and trust SB3's default hidden-state-carry-over
+#     to do the same job.
+#   - Wijmans trained 3-layer 512-d LSTMs with rollout length 256 across
+#     256 parallel envs (16 GPUs x 16 agents) for ~2B steps. Their key
+#     finding is that long memory only emerges with persistent hidden
+#     state across rollouts + lots of env steps — not with deeper BPTT.
+#     We take their n_steps=256, batch_size=256.
+#
+# IMPORTANT: n_envs is NOT a def-level field; it's set at CLI dispatch (or
+# by the scheduler's machine profile). Run with:
+#
+#   python train.py def=memory_houses_paperhparams n_envs=256 \
+#       base_port=9100 metaseed=0
+#
+# 256 fresh Unity instances need a lot of CPU + RAM. Either:
+#   (a) drop to n_envs=32 or 64 first to confirm the recipe before scaling, or
+#   (b) make sure RATSIM_UNITY_BIN is set and the box has the headroom.
+#
+# Cardinality: 1 variation × 1 method × 1 seed = 1 run.
+# Each run is 10 stages of 10M steps. Bump total_steps if results encourage.
+
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: empty_box_130_houses
+
+total_steps: 100_000_000
+n_stages: 10
+mode: dfs
+
+methods:
+  - name: recurrent_ppo
+
+seeds: 3
+
+# Single variation (Memory Maze IMPALA recipe — short rollouts, modest LSTM,
+# lots of envs). Long-term memory is carried via persistent LSTM hidden state
+# across rollouts, not via BPTT depth.
+variations:
+  - name: baseline
+    method_args:
+      n_steps: 256
+      batch_size: 256
+      n_epochs: 4
+      learning_rate: 2.0e-4
+      gamma: 0.997
+      gae_lambda: 0.95
+      ent_coef: 0.001
+      max_grad_norm: 0.5
+      policy_kwargs:
+        lstm_hidden_size: 256
+        n_lstm_layers: 1

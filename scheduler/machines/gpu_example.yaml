@@ -27,7 +27,7 @@ method_profiles:
   ppo:
     needs:
       cpu_slot: 4
-    n_envs: 4
+    n_envs: 8
     args:
       method.device: cpu
 
@@ -35,7 +35,7 @@ method_profiles:
     needs:
       gpu: 1
       cpu_slot: 1
-    n_envs: 1
+    n_envs: 8
     args:
       method.device: cuda
 
@@ -43,7 +43,7 @@ method_profiles:
     needs:
       gpu: 1
       cpu_slot: 4
-    n_envs: 4
+    n_envs: 8
     # Dreamer has a known unfixed memory leak (~6-8 KB/env-step in the train
     # process). With n_envs=4 the leak fills 4x faster in wallclock terms,
     # so SIGTERM at 30 GB still gives ~5-7 hours per cycle before kill —

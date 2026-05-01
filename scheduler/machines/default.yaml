@@ -20,17 +20,20 @@ method_profiles:
   ppo:
     needs:
       cpu_slot: 1
+    n_envs: 8
     args:
       method.device: cpu
 
   recurrent_ppo:
     needs:
       cpu_slot: 1
+    n_envs: 8
     args:
       method.device: cpu
 
   dreamer:
     needs:
       cpu_slot: 1
+    n_envs: 8
     args:
       method.jax.platform: cpu
