@@ -1,0 +1,21 @@
+# Method comparison: PPO vs Dreamer vs RecurrentPPO on the same maze + task.
+#
+# Simplest usecase. Single world, single task, no variations.  RecurrentPPO is
+# slow + high variance, so we run only 1 seed for it. PPO and Dreamer get 3.
+#
+# Cardinality: 1 variation × 3 methods × varying seeds = 3 + 3 + 1 = 7 runs.
+# Each run is 10 stages of 1M steps (BFS interleave).
+
+agent_preset: sphereagent_2d_lidar
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: empty_box_130_houses
+
+total_steps: 3_000_000
+n_stages: 10
+mode: dfs
+
+methods:
+  - name: recurrent_ppo
+  # - name: dreamer
+
+seeds: 3
