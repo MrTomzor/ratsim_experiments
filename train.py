@@ -10,12 +10,12 @@ Two ways to specify what to train on:
     python train.py def=method_compare method=ppo run_folder=my_run
 
 2. Inline (no def file — give the same fields on the CLI):
-    python train.py method=ppo agent_preset=sphereagent_2d_lidar \\
-                    task_preset=default world_preset=maze_default \\
+    python train.py method=ppo agent=sphereagent_2d_lidar \\
+                    task=default world=maze_default \\
                     total_steps=1_000_000 n_stages=10
-    # Minimal: defaults agent_preset=sphereagent_2d_lidar, task_preset=default,
-    # n_stages=1. world_preset is required.
-    python train.py method=ppo world_preset=maze_default total_steps=100_000
+    # Minimal: defaults agent=sphereagent_2d_lidar, task=default,
+    # n_stages=1. world is required.
+    python train.py method=ppo world=maze_default total_steps=100_000
 
 Resuming an existing run (e.g. from the scheduler):
     python train.py def=... method=ppo run_folder=my_run start_stage=3 end_stage=4
@@ -389,8 +389,8 @@ def main():
             exp = build_inline_def(method_name, overrides)
         except ValueError as e:
             print(f"[train] ERROR (inline def): {e}\n"
-                  f"        Required: method=, world_preset=, total_steps=. "
-                  f"Optional: agent_preset=, task_preset=, n_stages= (default 1).")
+                  f"        Required: method=, world=, total_steps=. "
+                  f"Optional: agent=, task=, n_stages= (default 1).")
             sys.exit(1)
     variation = find_variation(exp, variation_name)
 

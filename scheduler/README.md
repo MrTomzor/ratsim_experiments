@@ -121,17 +121,19 @@ The scheduler always loads from `defs/*.yaml`, but `train.py` (and
 want to save a file:
 
 ```bash
-python train.py method=ppo world_preset=maze_default total_steps=100_000
-python train.py method=ppo agent_preset=sphereagent_2d_lidar \
-    task_preset=volumetric_exploration_2000_collision_penalty \
-    world_preset=maze_default total_steps=1_000_000 n_stages=10 metaseed=42
-python train_dreamerv3.py world_preset=maze_default total_steps=500_000 n_stages=5
+python train.py method=ppo world=maze_default total_steps=100_000
+python train.py method=ppo agent=sphereagent_2d_lidar \
+    task=volumetric_exploration_2000_collision_penalty \
+    world=maze_default total_steps=1_000_000 n_stages=10 metaseed=42
+python train_dreamerv3.py world=maze_default total_steps=500_000 n_stages=5
 ```
 
-Defaults for inline mode: `agent_preset=sphereagent_2d_lidar`,
-`task_preset=default`, `n_stages=1`. `world_preset` and `total_steps` are
-required. For curricula or variation sweeps, write a def — that's exactly
-the case where saving the file pays off.
+The CLI keys `world` / `task` / `agent` map to the YAML schema
+`world_preset` / `task_preset` / `agent_preset` when assembling an inline
+def. Defaults for inline mode: `agent=sphereagent_2d_lidar`,
+`task=default`, `n_stages=1`. `world` and `total_steps` are required.
+For curricula or variation sweeps, write a def — that's exactly the case
+where saving the file pays off.
 
 ### Override resolution
 

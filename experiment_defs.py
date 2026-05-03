@@ -239,8 +239,10 @@ def build_inline_def(method_name: str, overrides: dict) -> ExperimentDef:
     when run without `def=`. Mutates `overrides` in place by removing the
     consumed keys.
 
-    Recognized keys (all optional except where noted):
-      agent_preset, task_preset, world_preset  (string or list)
+    Recognized CLI keys (all optional except where noted):
+      agent, task, world   (string or list of preset names — map to
+                            agent_preset / task_preset / world_preset
+                            internally and in the YAML schema)
       total_steps          (required if no `stages:`)
       n_stages             (defaults to 1 if total_steps given alone)
       stages               (list of {steps, world_preset} dicts — rare on CLI)
@@ -248,8 +250,11 @@ def build_inline_def(method_name: str, overrides: dict) -> ExperimentDef:
       step_multiplier      (passes through; train.py applies it to stage.steps)
     """
     raw: dict = {}
-    for key in ("agent_preset", "task_preset", "world_preset",
-                "total_steps", "n_stages", "stages",
+    cli_alias = {"agent": "agent_preset", "task": "task_preset", "world": "world_preset"}
+    for cli_key, raw_key in cli_alias.items():
+        if cli_key in overrides:
+            raw[raw_key] = overrides.pop(cli_key)
+    for key in ("total_steps", "n_stages", "stages",
                 "mode", "step_multiplier"):
         if key in overrides:
             raw[key] = overrides.pop(key)

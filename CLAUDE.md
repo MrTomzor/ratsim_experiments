@@ -148,19 +148,20 @@ python train.py def=method_compare method=ppo step_multiplier=2.0
 python train.py def=gps_ablation method=ppo variation=no_gps
 
 # --- Inline (no def file — for quick ad-hoc training) ---
-# Minimal: world_preset and total_steps are required; agent / task / n_stages
-# default to sphereagent_2d_lidar / default / 1.
-python train.py method=ppo world_preset=maze_default total_steps=100_000
+# Minimal: world and total_steps are required; agent / task / n_stages
+# default to sphereagent_2d_lidar / default / 1. (CLI keys `world`/`task`/
+# `agent` map to YAML schema `world_preset`/`task_preset`/`agent_preset`.)
+python train.py method=ppo world=maze_default total_steps=100_000
 
 # Full inline:
 python train.py method=ppo \
-    agent_preset=sphereagent_2d_lidar \
-    task_preset=volumetric_exploration_2000_collision_penalty \
-    world_preset=maze_default \
+    agent=sphereagent_2d_lidar \
+    task=volumetric_exploration_2000_collision_penalty \
+    world=maze_default \
     total_steps=1_000_000 n_stages=10 metaseed=42
 
 # Dreamer (inline mode infers method=dreamer):
-python train_dreamerv3.py world_preset=maze_default total_steps=500_000 n_stages=5
+python train_dreamerv3.py world=maze_default total_steps=500_000 n_stages=5
 
 # --- Evaluate trained model (test.py still uses the old rundef path; needs porting) ---
 python test.py def=default_forest_foraging model=results/my_run/checkpoints/final.zip

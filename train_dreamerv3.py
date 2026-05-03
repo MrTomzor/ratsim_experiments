@@ -10,7 +10,7 @@ Mirrors the CLI of train.py for parity with the SB3 methods:
     python train_dreamerv3.py def=method_compare method.batch_size=8
 
     # Inline (no def file):
-    python train_dreamerv3.py world_preset=maze_default total_steps=1_000_000
+    python train_dreamerv3.py world=maze_default total_steps=1_000_000
 
 Resuming an existing run (e.g. from the scheduler):
     python train_dreamerv3.py def=... run_folder=my_run start_stage=3 end_stage=4
@@ -234,8 +234,8 @@ def main():
             exp = build_inline_def("dreamer", overrides)
         except ValueError as e:
             print(f"[dreamerv3] ERROR (inline def): {e}\n"
-                  f"            Required: world_preset=, total_steps=. "
-                  f"Optional: agent_preset=, task_preset=, n_stages= (default 1).")
+                  f"            Required: world=, total_steps=. "
+                  f"Optional: agent=, task=, n_stages= (default 1).")
             sys.exit(1)
     variation = find_variation(exp, variation_name)
 

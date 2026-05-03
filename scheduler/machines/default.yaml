@@ -14,7 +14,7 @@
 #   python scheduler_run.py <exp>
 
 resources:
-  cpu_slot: 2
+  cpu_slot: 1
 
 method_profiles:
   ppo:
@@ -34,6 +34,6 @@ method_profiles:
   dreamer:
     needs:
       cpu_slot: 1
-    n_envs: 8
+    n_envs: 4
     args:
       method.jax.platform: cpu

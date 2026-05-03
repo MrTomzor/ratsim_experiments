@@ -40,20 +40,27 @@ import embodied
 import dreamerv3  # noqa: F401 — needed to register agent modules
 from dreamerv3.main import wrap_env
 
+from ratsim.config_blender import blend_presets
+
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
 
-# Reuse the exact same helpers the trainer uses so eval builds an env
-# matching the trained one.
+# Reuse the trainer's config builder so eval matches training.
 from train_dreamerv3 import (
-    load_rundef,
-    resolve_world_config,
-    resolve_task_config,
-    resolve_agent_config,
     build_config,
     parse_overrides,
     DEFAULT_SIZE,
+    DEFS_DIR,
+)
+from experiment_defs import (
+    as_preset_list,
+    find_variation,
+    load_experiment_def,
+    resolve_agent_preset,
+    resolve_def_path,
+    resolve_stage_world,
+    resolve_task_preset,
 )
 
 
@@ -216,26 +223,67 @@ def eval_stage(
 def main():
     overrides = parse_overrides(sys.argv[1:])
 
-    rundef_name = overrides.pop("def", None)
-    if rundef_name is None:
-        print("Usage: python test_dreamerv3.py def=<rundef> model=<ckpt_dir> [...]")
-        sys.exit(1)
-    rundef_stem = Path(rundef_name).stem
+    # Two modes:
+    #   def=<exp> [variation=<name>] [stage=last|all|N]   — resolves through experiment_defs
+    #   world=<p> [task=<p>] [agent=<p>]                  — inline, single stage
+    def_arg = overrides.pop("def", None)
+    variation_name = overrides.pop("variation", "baseline")
+    stage_arg = overrides.pop("stage", "last")  # "all", "last", or an int index
 
     model_arg = overrides.pop("model", None)
     if model_arg is None:
-        print("Error: model=<path> is required (directory containing agent.pkl)")
+        print("Usage:")
+        print("  python test_dreamerv3.py model=<ckpt_dir> def=<exp> "
+              "[variation=<name>] [stage=last|all|N] ...")
+        print("  python test_dreamerv3.py model=<ckpt_dir> world=<p> "
+              "[task=<p>] [agent=<p>] ...")
         sys.exit(1)
 
     eval_seeds_raw = overrides.pop("eval_seeds", "1,2,3,4,5,6,7,8,9,10")
     episodes_per_seed = int(overrides.pop("episodes_per_seed", 1))
-    run_name = overrides.pop(
-        "name",
-        f"eval_{rundef_stem}_dreamerv3_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-    )
     metaseed = int(overrides.pop("metaseed", 0))
     size = overrides.pop("size", DEFAULT_SIZE)
-    stage_arg = overrides.pop("stage", "all")  # "all", "last", or an int index
+
+    if def_arg is not None:
+        def_path = resolve_def_path(DEFS_DIR, def_arg)
+        if not def_path.exists():
+            available = [f.stem for f in DEFS_DIR.glob("*.yaml")]
+            print(f"Error: experiment def not found at {def_path}\n"
+                  f"Available in {DEFS_DIR}: {available}")
+            sys.exit(1)
+        exp = load_experiment_def(def_path)
+        variation = find_variation(exp, variation_name)
+        agent_preset = resolve_agent_preset(exp, variation)
+        task_preset = resolve_task_preset(exp, variation)
+
+        if stage_arg == "all":
+            stage_indices = list(range(len(exp.stages)))
+        elif stage_arg == "last":
+            stage_indices = [len(exp.stages) - 1]
+        else:
+            stage_indices = [int(stage_arg)]
+        stage_world_presets = [
+            resolve_stage_world(exp.stages[i], variation, exp)
+            for i in stage_indices
+        ]
+        run_label = f"{exp.exp_id}_{variation_name}"
+    else:
+        agent_preset = as_preset_list(
+            overrides.pop("agent", "sphereagent_2d_lidar"))
+        task_preset = as_preset_list(overrides.pop("task", "default"))
+        world_preset = overrides.pop("world", None)
+        if world_preset is None:
+            print("Error: must provide def=<exp> or world=<preset>.")
+            sys.exit(1)
+        world_preset = as_preset_list(world_preset)
+        stage_indices = [0]
+        stage_world_presets = [world_preset]
+        run_label = "_".join(world_preset)
+
+    run_name = overrides.pop(
+        "name",
+        f"eval_{run_label}_dreamerv3_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+    )
 
     # method.* passthrough for the dreamer config
     method_overrides = {}
@@ -252,18 +300,12 @@ def main():
     else:
         eval_seeds = [int(eval_seeds_raw)]
 
-    rundef = load_rundef(rundef_name)
-    stages = rundef["stages"]
-
-    if stage_arg == "all":
-        stage_indices = list(range(len(stages)))
-    elif stage_arg == "last":
-        stage_indices = [len(stages) - 1]
-    else:
-        stage_indices = [int(stage_arg)]
-
     ckpt_path = resolve_ckpt_path(model_arg)
     print(f"Checkpoint: {ckpt_path}")
+
+    agent_config = blend_presets("agents", agent_preset)
+    task_config = blend_presets("task", task_preset)
+    stage_world_configs = [blend_presets("world", wp) for wp in stage_world_presets]
 
     results_dir = Path(__file__).parent / "results" / run_name
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -278,7 +320,11 @@ def main():
     with open(results_dir / "eval_config.json", "w") as f:
         json.dump(
             {
-                "rundef": rundef_stem,
+                "def": def_arg,
+                "variation": variation_name if def_arg else None,
+                "agent_preset": agent_preset,
+                "task_preset": task_preset,
+                "world_presets_per_stage": stage_world_presets,
                 "method": "dreamerv3",
                 "model": str(ckpt_path),
                 "eval_seeds": "inf" if eval_seeds is None else eval_seeds,
@@ -293,26 +339,27 @@ def main():
         )
 
     print(f"Results: {results_file}")
+    print(f"Agent preset:   {agent_preset}")
+    print(f"Task preset:    {task_preset}")
+    print(f"World presets:  {stage_world_presets}")
+    print(f"Stage indices:  {stage_indices}")
     print(
         f"Seeds: {'inf' if eval_seeds is None else eval_seeds}, "
-        f"episodes/seed: {episodes_per_seed}, stages: {stage_indices}"
+        f"episodes/seed: {episodes_per_seed}"
     )
-
-    # Build agent once — the obs/act spaces are the same across stages for
-    # a given rundef (only world config changes). We pick the first requested
-    # stage to construct the env for space inference.
-    first_stage = stages[stage_indices[0]]
 
     config = build_config(method_overrides, scratch_logdir, total_steps=1, size=size)
     # Eval runs single-env, no train ratio relevance.
     config = config.update({"run.envs": 1, "run.eval_envs": 0})
 
+    # Build env with the first eval-stage's world config; we hot-swap per stage
+    # below without tearing down the TCP connection or rebuilding the agent.
     gym_env = WildfireGymEnv(
-        worldgen_config=resolve_world_config(first_stage),
-        agent_config=resolve_agent_config(rundef),
+        worldgen_config=stage_world_configs[0],
+        agent_config=agent_config,
         sensor_config={},
         action_config={"control_mode": "velocity"},
-        task_config=resolve_task_config(rundef, first_stage),
+        task_config=task_config,
         metaworldgen_config=None,  # deterministic per-episode seeding instead
     )
     adapter = GymnasiumToEmbodied(gym_env, obs_key="vector", act_key="action")
@@ -347,21 +394,19 @@ def main():
     print("Agent loaded.")
 
     try:
-        for stage_idx in stage_indices:
-            stage = stages[stage_idx]
+        for i, stage_idx in enumerate(stage_indices):
+            world_config = stage_world_configs[i]
             print(f"\n{'='*60}")
             print(
-                f"Stage {stage_idx + 1}/{len(stages)}: "
-                f"{stage.get('world_presets', ['?'])}"
+                f"Stage {stage_idx}: world={stage_world_presets[i]}"
             )
             print(f"{'='*60}")
 
-            # Swap in this stage's world/task config without tearing down the
-            # TCP connection. reset() reads these each episode.
-            gym_env.worldgen_config = resolve_world_config(stage)
-            gym_env.task_config = resolve_task_config(rundef, stage)
-            # TaskTracker reads task_config on reset via env.reset(); re-init
-            # defensively in case the env caches anything derived from it.
+            # Swap in this stage's world config without tearing down the TCP
+            # connection. reset() reads worldgen_config each episode. Task
+            # and agent are stable across stages in this script.
+            gym_env.worldgen_config = world_config
+            gym_env.task_config = task_config
             from ratsim.task_tracker import TaskTracker
             gym_env.task_tracker = TaskTracker(gym_env.task_config)
 
@@ -369,7 +414,7 @@ def main():
                 wrapped_env=wrapped,
                 gym_env=gym_env,
                 agent=agent,
-                rundef_name=rundef_stem,
+                rundef_name=run_label,
                 stage_idx=stage_idx,
                 seeds=eval_seeds,
                 episodes_per_seed=episodes_per_seed,
