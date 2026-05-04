@@ -22,7 +22,8 @@ Walks `<exp_dir>/runs/<variation>__<method>__seed<i>/`, loads each
 and it just re-reads whatever's on disk. Run with `--run-eval N` to (re)write
 those files — one subprocess per run in the method's venv (the same env-var
 convention the scheduler uses: $PPO_PYTHON_PATH / $DREAMER_PYTHON_PATH).
-Dreamer eval is not yet implemented; those runs are skipped with a warning.
+SB3 runs go through `eval_one_run.py`; dreamer runs go through
+`eval_one_run_dreamer.py` (loads via embodied + dreamerv3.Agent).
 
 Output dir defaults to `<exp_dir>/analysis/` (or pass `--out`). Run from the
 sb3 venv (needs pandas + matplotlib).
@@ -47,6 +48,17 @@ import pandas as pd  # noqa: E402
 REPO_ROOT = Path(__file__).parent
 EXP_ROOT = REPO_ROOT / "results" / "experiments"
 EVAL_SCRIPT = REPO_ROOT / "eval_one_run.py"
+EVAL_SCRIPT_DREAMER = REPO_ROOT / "eval_one_run_dreamer.py"
+
+# Method → eval script. Splits because dreamer needs the dreamer venv +
+# embodied agent loader, while sb3 methods load via stable_baselines3.
+EVAL_SCRIPT_BY_METHOD = {
+    "ppo": EVAL_SCRIPT,
+    "recurrent_ppo": EVAL_SCRIPT,
+    "cnn_ppo": EVAL_SCRIPT,
+    "cnn_recurrent_ppo": EVAL_SCRIPT,
+    "dreamer": EVAL_SCRIPT_DREAMER,
+}
 
 # Metrics we plot from train + eval JSONLs. Always present in the schema
 # (see env.py's _log_episode_jsonl and test.py's make_episode_result).
@@ -286,9 +298,10 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
     succeeded, skipped, failed = [], [], []
     for r in runs:
         method = r["method"]
-        if method == "dreamer":
-            print(f"\n[eval] SKIP {r['run_id']}: dreamer eval not yet "
-                  f"implemented (needs the dreamer venv + embodied loader).")
+        eval_script = EVAL_SCRIPT_BY_METHOD.get(method)
+        if eval_script is None:
+            print(f"\n[eval] SKIP {r['run_id']}: no eval script for method "
+                  f"'{method}'. Known: {sorted(EVAL_SCRIPT_BY_METHOD)}.")
             skipped.append(r["run_id"])
             continue
         try:
@@ -297,7 +310,7 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
             print(f"\n[eval] SKIP {r['run_id']}: {e}")
             skipped.append(r["run_id"])
             continue
-        cmd = [python, str(EVAL_SCRIPT),
+        cmd = [python, str(eval_script),
                "--run_dir", str(r["run_dir"]),
                "--exp_dir", str(exp_dir),
                "--n_episodes", str(n_episodes),

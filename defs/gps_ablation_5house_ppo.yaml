@@ -1,0 +1,27 @@
+# Does GPS (relative_pose + compass) actually help RL training?
+#
+# Two variations differ only in the agent preset: with vs. without those two
+# sensors. PPO and Dreamer compared, 3 seeds each.
+#
+# Cardinality: 2 variations × 2 methods × 3 seeds = 12 runs.
+# Each run is 10 stages of 1M steps (BFS).
+
+agent_preset: sphereagent_2d_lidar           # baseline includes relative_pose + compass
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: empty_box_130_houses
+
+total_steps: 3_000_000
+n_stages: 10
+mode: dfs
+
+methods:
+  - name: ppo
+  # - name: dreamer
+
+seeds: 3
+
+variations:
+  - name: with_gps
+    # baseline — uses experiment-level agent_preset above
+  - name: no_gps
+    agent_preset: sphereagent_2d_lidar_only   
