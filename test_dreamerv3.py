@@ -20,6 +20,9 @@ Usage
     # GPU
     python test_dreamerv3.py def=... model=... method.jax.platform=cuda
 
+    # Memory ablation (RSSM amnesia: is_first=True every step):
+    python test_dreamerv3.py def=... model=... ablate-memory=1
+
 The ``model`` path must point to a directory containing ``agent.pkl``
 (i.e. a checkpoint snapshot). A path ending in ``ckpt/latest`` is
 resolved via the pointer file written by embodied.
@@ -75,6 +78,7 @@ def make_episode_result(
     step_count: int,
     distance: float,
     wall_time: float,
+    ablate_memory: bool = False,
 ) -> dict:
     return {
         "method": "dreamerv3",
@@ -89,6 +93,7 @@ def make_episode_result(
         "termination_reason": tracker.get_termination_reason(),
         "distance_traveled": distance,
         "wall_time_s": wall_time,
+        "ablate_memory": ablate_memory,
     }
 
 
@@ -129,6 +134,7 @@ def eval_stage(
     seeds: list[int] | None,
     episodes_per_seed: int,
     results_file: Path,
+    ablate_memory: bool = False,
 ) -> None:
     # Seed injection: the embodied adapter calls gym_env.reset() without
     # options. We patch reset() to consume a pending seed set by the eval loop
@@ -186,6 +192,12 @@ def eval_stage(
                     for k, v in obs.items()
                     if not k.startswith("log/")
                 }
+                if ablate_memory:
+                    # In-distribution amnesia: every step looks like episode
+                    # start to the agent, so it resets its RSSM carry the same
+                    # way it learned to at episode boundaries.
+                    obs_batched["is_first"] = np.ones_like(
+                        obs_batched["is_first"])
                 carry, act, _ = agent.policy(carry, obs_batched, mode="eval")
                 action = {k: np.asarray(v)[0] for k, v in act.items()}
                 action["reset"] = False
@@ -209,6 +221,7 @@ def eval_stage(
                 step_count=step_count,
                 distance=distance,
                 wall_time=wall_time,
+                ablate_memory=ablate_memory,
             )
             append_result(results_file, result)
             print(
@@ -243,6 +256,8 @@ def main():
     episodes_per_seed = int(overrides.pop("episodes_per_seed", 1))
     metaseed = int(overrides.pop("metaseed", 0))
     size = overrides.pop("size", DEFAULT_SIZE)
+    ablate_memory = str(overrides.pop("ablate-memory", "0")).lower() in (
+        "1", "true", "yes", "y")
 
     if def_arg is not None:
         def_path = resolve_def_path(DEFS_DIR, def_arg)
@@ -280,9 +295,11 @@ def main():
         stage_world_presets = [world_preset]
         run_label = "_".join(world_preset)
 
+    ablation_suffix = "_ablated" if ablate_memory else ""
     run_name = overrides.pop(
         "name",
-        f"eval_{run_label}_dreamerv3_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        f"eval_{run_label}_dreamerv3{ablation_suffix}_"
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
     )
 
     # method.* passthrough for the dreamer config
@@ -332,6 +349,7 @@ def main():
                 "stage_indices": stage_indices,
                 "size": size,
                 "method_overrides": method_overrides,
+                "ablate_memory": ablate_memory,
                 "run_name": run_name,
             },
             f,
@@ -347,6 +365,9 @@ def main():
         f"Seeds: {'inf' if eval_seeds is None else eval_seeds}, "
         f"episodes/seed: {episodes_per_seed}"
     )
+    if ablate_memory:
+        print("ABLATE MEMORY: forcing is_first=True every step "
+              "(RSSM carry reset each step).")
 
     config = build_config(method_overrides, scratch_logdir, total_steps=1, size=size)
     # Eval runs single-env, no train ratio relevance.
@@ -419,6 +440,7 @@ def main():
                 seeds=eval_seeds,
                 episodes_per_seed=episodes_per_seed,
                 results_file=results_file,
+                ablate_memory=ablate_memory,
             )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")

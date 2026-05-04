@@ -25,6 +25,10 @@ convention the scheduler uses: $PPO_PYTHON_PATH / $DREAMER_PYTHON_PATH).
 SB3 runs go through `eval_one_run.py`; dreamer runs go through
 `eval_one_run_dreamer.py` (loads via embodied + dreamerv3.Agent).
 
+Add `--ablate-memory` (dreamer-only) to also run an RSSM amnesia eval; results
+land in `eval_episodes_ablated.jsonl` and produce
+`eval_<metric>_ablation.png` paired bars next to the baseline plots.
+
 Output dir defaults to `<exp_dir>/analysis/` (or pass `--out`). Run from the
 sb3 venv (needs pandas + matplotlib).
 """
@@ -128,6 +132,8 @@ def discover_runs(exp_dir: Path) -> list[dict]:
             "seed": seed,
             "train_df": load_jsonl(run_dir / "train_episodes.jsonl"),
             "eval_df": load_jsonl(run_dir / "eval_episodes.jsonl"),
+            "eval_df_ablated": load_jsonl(
+                run_dir / "eval_episodes_ablated.jsonl"),
             "done": (run_dir / "DONE").exists(),
         })
     return out
@@ -268,6 +274,86 @@ def plot_eval_bar(runs: list[dict], metric: str, out_dir: Path) -> None:
     print(f"  -> {out_path}")
 
 
+def plot_eval_ablation_bar(runs: list[dict], metric: str,
+                           out_dir: Path) -> None:
+    """Paired bar chart: baseline vs memory-ablated, grouped by
+    (variation, method). Drawn only if at least one run has ablated data on
+    disk. Bars use the same per-variation color scheme as the standard eval
+    plot; ablated bars are hatched and slightly transparent so the
+    comparison is readable in a single glance."""
+    have_baseline_or_ablated = [
+        r for r in runs
+        if (r["eval_df"] is not None
+            and metric in r["eval_df"].columns)
+        or (r["eval_df_ablated"] is not None
+            and metric in r["eval_df_ablated"].columns)
+    ]
+    if not any(r["eval_df_ablated"] is not None
+               and metric in (r["eval_df_ablated"].columns
+                              if r["eval_df_ablated"] is not None else [])
+               for r in have_baseline_or_ablated):
+        return  # no ablated data → nothing to compare
+
+    base_seed_means: dict[tuple[str, str], list[float]] = defaultdict(list)
+    abl_seed_means: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for r in have_baseline_or_ablated:
+        key = (r["variation"], r["method"])
+        if r["eval_df"] is not None and metric in r["eval_df"].columns:
+            base_seed_means[key].append(float(r["eval_df"][metric].mean()))
+        if (r["eval_df_ablated"] is not None
+                and metric in r["eval_df_ablated"].columns):
+            abl_seed_means[key].append(
+                float(r["eval_df_ablated"][metric].mean()))
+
+    keys = sorted(set(base_seed_means) | set(abl_seed_means))
+    if not keys:
+        return
+    variations = sorted({v for (v, _) in keys})
+    var_color = variation_colors(variations)
+
+    fig, ax = plt.subplots(figsize=(max(6, 1.4 * len(keys) + 1), 5))
+    xs = np.arange(len(keys))
+    bar_w = 0.4
+
+    def _stats(vals: list[float]) -> tuple[float, float, int]:
+        if not vals:
+            return float("nan"), 0.0, 0
+        return (float(np.mean(vals)),
+                float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
+                len(vals))
+
+    for i, key in enumerate(keys):
+        var, _ = key
+        bm, bs, bn = _stats(base_seed_means.get(key, []))
+        am, asd, an = _stats(abl_seed_means.get(key, []))
+        ax.bar(xs[i] - bar_w / 2, bm, bar_w, yerr=bs, capsize=4,
+               color=var_color[var], edgecolor="black", lw=0.5,
+               label="baseline" if i == 0 else None)
+        ax.bar(xs[i] + bar_w / 2, am, bar_w, yerr=asd, capsize=4,
+               color=var_color[var], edgecolor="black", lw=0.5,
+               hatch="//", alpha=0.6,
+               label="ablated (is_first=True every step)" if i == 0 else None)
+        if not np.isnan(bm) and bn:
+            ax.text(xs[i] - bar_w / 2, bm, f"n={bn}",
+                    ha="center", va="bottom", fontsize=7)
+        if not np.isnan(am) and an:
+            ax.text(xs[i] + bar_w / 2, am, f"n={an}",
+                    ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"{v}\n{m}" for (v, m) in keys],
+                       rotation=15, ha="right", fontsize=9)
+    ax.set_ylabel(f"eval {metric}  (mean of per-seed means; err = std)")
+    ax.set_title(f"Memory ablation: {metric}")
+    ax.legend(fontsize=9, loc="best")
+    ax.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    out_path = out_dir / f"eval_{metric}_ablation.png"
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"  -> {out_path}")
+
+
 # -- Eval dispatch ---------------------------------------------------------
 
 def python_for_method(method_name: str) -> str:
@@ -290,11 +376,16 @@ def python_for_method(method_name: str) -> str:
 
 def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                       deterministic: bool = False,
-                      eval_metaseed: int = 42) -> None:
+                      eval_metaseed: int = 42,
+                      ablate_memory: bool = False) -> None:
     """Sequentially shell out to eval_one_run.py for each run in its method's
     venv. Subprocess inherits stdout/stderr so per-episode progress streams
     live. Failures are reported but don't abort the loop — other runs still
-    get a shot."""
+    get a shot.
+
+    --ablate-memory is dreamer-only (RSSM amnesia via is_first=True every
+    step). Non-dreamer runs are skipped when this flag is on so we don't
+    silently produce a non-ablated 'ablation' result."""
     succeeded, skipped, failed = [], [], []
     for r in runs:
         method = r["method"]
@@ -302,6 +393,11 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
         if eval_script is None:
             print(f"\n[eval] SKIP {r['run_id']}: no eval script for method "
                   f"'{method}'. Known: {sorted(EVAL_SCRIPT_BY_METHOD)}.")
+            skipped.append(r["run_id"])
+            continue
+        if ablate_memory and method != "dreamer":
+            print(f"\n[eval] SKIP {r['run_id']}: --ablate-memory is "
+                  f"dreamer-only; method='{method}'.")
             skipped.append(r["run_id"])
             continue
         try:
@@ -317,6 +413,8 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                "--eval_metaseed", str(eval_metaseed)]
         if deterministic:
             cmd.append("--deterministic")
+        if ablate_memory:
+            cmd.append("--ablate-memory")
         print(f"\n[eval] === {r['run_id']} ===")
         print(f"[eval] cmd: {' '.join(cmd)}")
         rc = subprocess.run(cmd).returncode
@@ -385,6 +483,18 @@ def main() -> None:
                          "world sequence drawn from this seed; pass the same "
                          "value to a human-control session to reproduce. Only "
                          "meaningful with --run-eval.")
+    ap.add_argument("--ablate-memory", action="store_true",
+                    dest="ablate_memory",
+                    help="Memory-ablation eval: forwards --ablate-memory to "
+                         "eval_one_run_dreamer.py (RSSM amnesia via "
+                         "is_first=True every step). Writes "
+                         "eval_episodes_ablated.jsonl alongside the baseline "
+                         "eval_episodes.jsonl, then emits an "
+                         "eval_<metric>_ablation.png paired-bar chart. "
+                         "Dreamer-only — non-dreamer runs are skipped. Only "
+                         "meaningful with --run-eval; without --run-eval the "
+                         "ablation plot is still drawn from any cached "
+                         "eval_episodes_ablated.jsonl files on disk.")
     args = ap.parse_args()
 
     if args.run_eval is not None and args.run_eval < 1:
@@ -400,16 +510,24 @@ def main() -> None:
 
     if args.run_eval is not None:
         mode = "deterministic" if args.deterministic else "stochastic"
+        ablation_tag = "  [ABLATE MEMORY]" if args.ablate_memory else ""
         print(f"\nRunning {args.run_eval} {mode} eval episode(s) per run "
-              f"(eval_metaseed={args.eval_metaseed}, sequential, may take a while)...")
+              f"(eval_metaseed={args.eval_metaseed}, sequential, may take a while)"
+              f"{ablation_tag}...")
         run_eval_for_runs(runs, exp_dir, args.run_eval,
                           deterministic=args.deterministic,
-                          eval_metaseed=args.eval_metaseed)
-        # Re-discover so newly written eval_episodes.jsonl files are picked up.
+                          eval_metaseed=args.eval_metaseed,
+                          ablate_memory=args.ablate_memory)
+        # Re-discover so newly written eval_episodes(_ablated).jsonl files are picked up.
         runs = discover_runs(exp_dir)
-    elif args.deterministic:
-        print("[analyze] WARN: --deterministic only takes effect with --run-eval; "
-              "ignoring.")
+    else:
+        if args.deterministic:
+            print("[analyze] WARN: --deterministic only takes effect with "
+                  "--run-eval; ignoring.")
+        if args.ablate_memory:
+            print("[analyze] --ablate-memory without --run-eval: re-plotting "
+                  "from any cached eval_episodes_ablated.jsonl files; not "
+                  "running new ablated eval.")
 
     n_train = sum(1 for r in runs if r["train_df"] is not None)
     n_eval = sum(1 for r in runs if r["eval_df"] is not None)
@@ -430,6 +548,11 @@ def main() -> None:
     else:
         print("  (no eval_episodes.jsonl found; skipping eval bar charts. "
               "Run with --run-eval N to populate them.)")
+
+    n_ablated = sum(1 for r in runs if r["eval_df_ablated"] is not None)
+    if n_ablated:
+        for m in EVAL_METRICS:
+            plot_eval_ablation_bar(runs, m, out_dir)
 
     print("\nDone.")
 

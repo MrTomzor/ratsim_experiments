@@ -19,6 +19,9 @@ Reads:
 Writes:
   <run_dir>/eval_episodes.jsonl — overwritten; same schema env.py uses for
                                    train_episodes.jsonl.
+                                   With --ablate-memory the path is
+                                   eval_episodes_ablated.jsonl instead, so
+                                   the baseline eval persists alongside.
 
 Reproducibility: every episode's world seed is drawn from
 np.random.default_rng(eval_metaseed) inside env.py:reset, so the same
@@ -111,6 +114,13 @@ def main() -> None:
                          "distribution — there's no separate argmax path. "
                          "Stochastic eval also matches training behaviour, "
                          "so this isn't a wart we need to fix to compare.")
+    ap.add_argument("--ablate-memory", action="store_true",
+                    help="Memory ablation: force is_first=True on every step "
+                         "so the agent resets its RSSM carry each step (the "
+                         "same reset path it was trained to handle at episode "
+                         "boundaries). In-distribution amnesia — tests "
+                         "whether the trained policy is actually using "
+                         "recurrent memory.")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -175,7 +185,9 @@ def main() -> None:
     port = instances[0].port
     print(f"[eval-dreamer] unity_port:   {port}")
 
-    eval_jsonl = run_dir / "eval_episodes.jsonl"
+    eval_jsonl = run_dir / (
+        "eval_episodes_ablated.jsonl" if args.ablate_memory
+        else "eval_episodes.jsonl")
     if eval_jsonl.exists():
         eval_jsonl.unlink()  # restart episode_idx at 0
 
@@ -241,7 +253,8 @@ def main() -> None:
     print("[eval-dreamer] agent loaded")
 
     print(f"[eval-dreamer] running {args.n_episodes} episodes "
-          f"(eval_metaseed={args.eval_metaseed})")
+          f"(eval_metaseed={args.eval_metaseed})"
+          f"{'  [ABLATE MEMORY]' if args.ablate_memory else ''}")
 
     try:
         for ep in range(args.n_episodes):
@@ -259,6 +272,8 @@ def main() -> None:
             while not bool(obs["is_last"]):
                 obs_b = {k: np.asarray(v)[None] for k, v in obs.items()
                          if not k.startswith("log/")}
+                if args.ablate_memory:
+                    obs_b["is_first"] = np.ones_like(obs_b["is_first"])
                 carry, act, _ = agent.policy(carry, obs_b, mode="eval")
                 action = {k: np.asarray(v)[0] for k, v in act.items()}
                 action["reset"] = False

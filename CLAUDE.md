@@ -104,6 +104,53 @@ python analyze_run_data.py symlinks/comparison_A/
 
 Needs the sb3 venv (pandas + matplotlib): `~/ratvenv/venv/bin/python analyze_run_data.py ...`.
 
+### Memory ablation (DreamerV3)
+
+Test-time probe for whether a trained DreamerV3 agent is actually using its
+recurrent (RSSM) memory. Mechanism: force `is_first=True` into the obs dict
+on every policy step. The agent was trained to handle this signal at episode
+boundaries, so it resets its RSSM carry the same way it learned to —
+**in-distribution amnesia**, not OOD zeroing of the hidden state.
+
+Caveat: this is an eval-time intervention, not a like-for-like comparison
+with a memoryless agent. Strong evidence if performance is unchanged
+(memory wasn't load-bearing); weaker evidence in the other direction (the
+ablated policy could degrade for reasons unrelated to information loss).
+For a clean "memory matters" claim, train a feedforward baseline.
+
+DreamerV3-only: `dreamerv3.Agent.policy()` always samples from the action
+distribution — there's no separate argmax/deterministic path — so the
+`is_first` mechanism is the cleanest amnesia we have. SB3 paths don't
+expose anything analogous and are skipped by the analyzer dispatcher.
+
+Three entry points, all sharing the same mechanism:
+
+| Use case | Script | Flag |
+|---|---|---|
+| Quick check on one checkpoint | `test_dreamerv3.py` | `ablate-memory=1` |
+| One scheduler run | `eval_one_run_dreamer.py` | `--ablate-memory` |
+| All dreamer runs in an experiment | `analyze_experiment.py --run-eval N` | `--ablate-memory` |
+
+```bash
+# Single checkpoint, full eval-style sweep over seeds. Auto-suffixes the
+# results dir with `_ablated` so baseline + ablated runs land separately.
+python test_dreamerv3.py def=houses_volex_1m \
+    model=results/<run>/checkpoints/stage_6 ablate-memory=1
+
+# Whole experiment. Writes eval_episodes_ablated.jsonl alongside the baseline
+# eval_episodes.jsonl in each run dir; produces eval_<metric>_ablation.png
+# paired-bar charts (baseline solid, ablated hatched) under analysis/.
+python analyze_experiment.py gps_ablation_5house --run-eval 10 --ablate-memory
+
+# Replot only — without --run-eval, --ablate-memory just re-renders from
+# any cached eval_episodes_ablated.jsonl files on disk.
+python analyze_experiment.py gps_ablation_5house --ablate-memory
+```
+
+Workflow for a paired comparison: run `--run-eval N` once for the baseline,
+then again with `--ablate-memory`. Both JSONLs persist; analyzer emits both
+the standard `eval_<metric>.png` and the comparison `eval_<metric>_ablation.png`.
+
 ### Human evaluation
 
 Human control is handled via `/enable_human_control` topic sent to Unity. The core function `ratsim.human_control_test.run_human_session()` manages the sim loop — Python ticks the sim, Unity handles human input, TaskTracker records metrics. test.py imports this for human eval runs.
@@ -116,6 +163,10 @@ ratsim_experiments/
 ├── train_dreamerv3.py       # Train DreamerV3 (separate venv — jax/embodied)
 ├── test.py                  # Evaluate a method on a run definition (RL, human, etc.)
 ├── analyze_run_data.py      # Load train_episodes.jsonl(s) → tables + plots
+├── analyze_experiment.py    # Scheduler-experiment analyzer: train curves +
+│                            #   eval bar charts + memory-ablation plot
+├── eval_one_run.py          # Per-run eval helper for SB3 (PPO / RecurrentPPO)
+├── eval_one_run_dreamer.py  # Per-run eval helper for DreamerV3 (embodied venv)
 ├── overnight_batch.sh       # Example bash queue for long unattended runs
 ├── experiment_defs.py       # Schema + loader for defs/*.yaml (shared by train + scheduler)
 ├── defs/                    # Experiment definitions (YAML)
