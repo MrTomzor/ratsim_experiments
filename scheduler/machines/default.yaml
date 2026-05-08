@@ -20,14 +20,14 @@ method_profiles:
   ppo:
     needs:
       cpu_slot: 1
-    n_envs: 8
+    n_envs: 4
     args:
       method.device: cpu
 
   recurrent_ppo:
     needs:
       cpu_slot: 1
-    n_envs: 8
+    n_envs: 4
     args:
       method.device: cpu
 
