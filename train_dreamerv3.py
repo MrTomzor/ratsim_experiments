@@ -174,9 +174,10 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "logdir": str(logdir),
         "task": "ratsim_wildfire",  # cosmetic; we bypass the suite switch in main.py
         "batch_size": 8,
-        "batch_length": 32,
-        "report_length": 32,
+        "batch_length": 128,
+        "report_length": 128,
         "replay.size": 1_000_000,
+        "agent.horizon": 500,
         "run.envs": int(n_envs),
         "run.eval_envs": 0,
         "run.steps": int(total_steps),
