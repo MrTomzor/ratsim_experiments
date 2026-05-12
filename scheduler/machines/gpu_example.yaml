@@ -42,12 +42,12 @@ method_profiles:
   dreamer:
     needs:
       gpu: 1
-      cpu_slot: 4
-    n_envs: 8
+      cpu_slot: 1
+    n_envs: 1
     # Dreamer has a known unfixed memory leak (~6-8 KB/env-step in the train
-    # process). With n_envs=4 the leak fills 4x faster in wallclock terms,
-    # so SIGTERM at 30 GB still gives ~5-7 hours per cycle before kill —
-    # plenty of progress per resume. See /home/tom/dreamer_crash_summary.md.
+    # process). At n_envs=1 the leak fills at base rate, so SIGTERM at 30 GB
+    # gives the longest possible per-cycle uptime before kill.
+    # See /home/tom/dreamer_crash_summary.md.
     max_ram_gb: 30
     args:
       method.jax.platform: cuda

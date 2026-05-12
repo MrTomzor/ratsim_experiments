@@ -156,7 +156,7 @@ def make_agent(config, exp, variation, stage, metaseed, unity_ports):
 
 # -- Config assembly ---------------------------------------------------------
 
-DEFAULT_SIZE = "size1m"
+DEFAULT_SIZE = "size12m"
 
 
 def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: str,
@@ -174,10 +174,10 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
         "logdir": str(logdir),
         "task": "ratsim_wildfire",  # cosmetic; we bypass the suite switch in main.py
         "batch_size": 8,
-        "batch_length": 128,
-        "report_length": 128,
+        "batch_length": 48,
+        "report_length": 48,
         "replay.size": 1_000_000,
-        "agent.horizon": 500,
+        "replay_context": 16,
         "run.envs": int(n_envs),
         "run.eval_envs": 0,
         "run.steps": int(total_steps),
