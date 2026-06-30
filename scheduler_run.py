@@ -34,11 +34,16 @@ def main():
              "(equivalent to rm -rf + run). Default behavior is to resume.")
     p.add_argument(
         "--use-port-9000", action="store_true", dest="use_port_9000",
-        help="Also consider port 9000 for one n_envs=1 dispatch at a time, "
-             "but only when Unity is alive on 9000 (TCP probe at dispatch "
-             "time). Useful for manually launching a Unity GUI on 9000 and "
-             "watching one training instance live; other dispatches still "
-             "go to 9100+ as usual.")
+        help="Demo mode: forces n_envs=1 on all method profiles and hands "
+             "port 9000 to one dispatch at a time, but only when Unity is "
+             "alive on 9000 (TCP probe at dispatch time). Useful for manually "
+             "launching a Unity GUI on 9000 and watching one training "
+             "instance learn live.")
+    p.add_argument(
+        "--show-console-prints", action="store_true", dest="show_console_prints",
+        help="Stream each subprocess's stdout/stderr to this console "
+             "(prefixed per run) in addition to writing it to the per-stage "
+             "log file. Off by default (logs go to file only).")
     cmd_run(p.parse_args())
 
 

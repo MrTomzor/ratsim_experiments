@@ -33,8 +33,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -581,7 +582,8 @@ def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
 def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
               port_base: int, exp: cfg.ExperimentDef,
               step_multiplier: float,
-              is_persistent: bool = False) -> ActiveJob:
+              is_persistent: bool = False,
+              show_console: bool = False) -> ActiveJob:
     cmd = build_command(run, stage_idx, profile, port_base, exp, step_multiplier,
                         is_persistent=is_persistent)
     log_dir = run.run_dir / "scheduler_logs"
@@ -595,15 +597,44 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
     print(f"[scheduler]   cmd: {' '.join(cmd)}")
 
     log_f = open(log_path, "w")
-    popen = subprocess.Popen(
-        cmd,
-        cwd=EXPERIMENTS_DIR,
-        stdout=log_f,
-        stderr=subprocess.STDOUT,
-        # Own process group so SIGINT to scheduler doesn't auto-propagate.
-        # We forward it manually on graceful shutdown.
-        preexec_fn=os.setsid,
-    )
+    if show_console:
+        # Mirror the child's output to both the log file and our console. We
+        # can't point stdout at two fds, so pipe it and drain in a daemon
+        # thread that tees each line. Each line is prefixed with run_id+stage
+        # so concurrent jobs stay distinguishable in the shared console.
+        popen = subprocess.Popen(
+            cmd,
+            cwd=EXPERIMENTS_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            preexec_fn=os.setsid,
+        )
+        prefix = f"[{run.run_id} s{stage_idx}] "
+
+        def _tee(pipe, sink, label):
+            try:
+                for line in pipe:
+                    sink.write(line)
+                    sink.flush()
+                    sys.stdout.write(label + line)
+                    sys.stdout.flush()
+            finally:
+                sink.close()
+
+        threading.Thread(target=_tee, args=(popen.stdout, log_f, prefix),
+                         daemon=True).start()
+    else:
+        popen = subprocess.Popen(
+            cmd,
+            cwd=EXPERIMENTS_DIR,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            # Own process group so SIGINT to scheduler doesn't auto-propagate.
+            # We forward it manually on graceful shutdown.
+            preexec_fn=os.setsid,
+        )
     return ActiveJob(
         run=run, stage_idx=stage_idx, popen=popen, port_base=port_base,
         profile=profile, started_at=datetime.now(), log_path=log_path,
@@ -632,6 +663,21 @@ def cmd_run(args):
     def_path, exp_dir = resolve_exp_dir(args.exp)
     exp = cfg.load_experiment_def(def_path)
     machine = cfg.load_machine_config(MACHINES_DIR, override=args.machine)
+
+    # --use-port-9000 is a demo mode: attach one training instance to the
+    # Unity GUI on port 9000 and watch it learn. That path is inherently
+    # single-env (the persistent slot hands out one port, not a window), so
+    # force n_envs=1 on every profile — otherwise a machine config with
+    # n_envs>1 (e.g. the default's 4) would never qualify for the slot and
+    # silently land on a headless 9100+ window instead.
+    use_port_9000 = bool(getattr(args, "use_port_9000", False))
+    if use_port_9000:
+        for name, profile in machine.method_profiles.items():
+            if profile.n_envs != 1:
+                print(f"[scheduler] --use-port-9000: forcing n_envs=1 for "
+                      f"'{name}' (was {profile.n_envs})")
+                machine.method_profiles[name] = replace(profile, n_envs=1)
+
     cfg.validate_against_machine(exp, machine)
 
     # CLI step-multiplier overrides the def-level one (with a warning if both set).
@@ -690,7 +736,6 @@ def cmd_run(args):
           f"{sum(m.n_seeds for m in exp.methods)} method-seeds)")
 
     rm = ResourceManager(machine.resources)
-    use_port_9000 = bool(getattr(args, "use_port_9000", False))
     port_alloc = PortAllocator(start=9100, window_size=10,
                                persistent_port=9000 if use_port_9000 else None)
     if use_port_9000:
@@ -698,6 +743,11 @@ def cmd_run(args):
               f"handed to one n_envs=1 dispatch when Unity is alive there. "
               f"Manually launch Unity on 9000 (e.g. start_ratsim_headless.sh) "
               f"to watch one training instance.")
+    show_console = bool(getattr(args, "show_console_prints", False))
+    if show_console:
+        print("[scheduler] --show-console-prints enabled: subprocess output "
+              "will stream to this console (prefixed per run) as well as the "
+              "per-stage log files.")
     active: list[ActiveJob] = []
     shutdown = {"requested": False}
 
@@ -846,7 +896,8 @@ def cmd_run(args):
             if port_base is None:
                 port_base = port_alloc.alloc()
             job = spawn_job(run, stage_idx, profile, port_base, exp,
-                            step_multiplier, is_persistent=is_persistent)
+                            step_multiplier, is_persistent=is_persistent,
+                            show_console=show_console)
             rm.allocate(profile.needs)
             active.append(job)
             in_flight.add((run.run_id, stage_idx))
@@ -1073,12 +1124,16 @@ def main():
              "(equivalent to rm -rf + run). Default behavior is to resume.")
     p_run.add_argument(
         "--use-port-9000", action="store_true", dest="use_port_9000",
-        help="Also consider port 9000 as a single-slot port for one n_envs=1 "
-             "dispatch at a time. The slot is only used when Unity is "
-             "actually alive on 9000 (TCP probe at dispatch time). Useful "
-             "for manually launching a Unity GUI on 9000 and watching one "
-             "training instance live; other dispatches still go to 9100+ "
-             "as usual.")
+        help="Demo mode: forces n_envs=1 on all method profiles and hands "
+             "port 9000 to one dispatch at a time. The slot is only used "
+             "when Unity is actually alive on 9000 (TCP probe at dispatch "
+             "time). Useful for manually launching a Unity GUI on 9000 and "
+             "watching one training instance learn live.")
+    p_run.add_argument(
+        "--show-console-prints", action="store_true", dest="show_console_prints",
+        help="Stream each subprocess's stdout/stderr to this console "
+             "(prefixed per run) in addition to writing it to the per-stage "
+             "log file. Off by default (logs go to file only).")
     p_run.set_defaults(func=cmd_run)
 
     p_st = sub.add_parser("status", help="Show experiment status")
