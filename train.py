@@ -48,6 +48,7 @@ import lstm_fastpath  # noqa: F401
 from ratsim.config_blender import blend_presets
 from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
+from ratsim_wildfire_gym_env.adaptive_difficulty import AdaptiveDifficultyWrapper
 from feature_extractors import LidarCnnExtractor
 
 from experiment_defs import (
@@ -340,6 +341,13 @@ class TrainingMetricsCallback(BaseCallback):
             if flat_explored:
                 self.logger.record("custom/avg_explored_area_m2", np.mean(flat_explored))
             self.logger.record("custom/longest_step_distance", np.max(longest_step_distance))
+
+            # Adaptive difficulty (if the wrapper is active it stamps every
+            # step's info with the current d; absent otherwise).
+            difficulties = [i["difficulty"] for i in self.locals.get("infos", [])
+                            if "difficulty" in i]
+            if difficulties:
+                self.logger.record("custom/difficulty", float(np.mean(difficulties)))
         return True
 
 
@@ -552,6 +560,11 @@ def main():
                     run_metadata=md,
                     unity_port=port,
                 )
+                if exp.adaptive_difficulty is not None:
+                    ad = exp.adaptive_difficulty
+                    env = AdaptiveDifficultyWrapper(
+                        env, ranges=ad.ranges, success_pickups=ad.success_pickups,
+                        step_up=ad.step_up, step_down=ad.step_down, d0=ad.d0)
                 return Monitor(env)
             return _make
 

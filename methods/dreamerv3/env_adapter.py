@@ -49,7 +49,7 @@ class GymnasiumToEmbodied(embodied.Env):
             else {self._obs_key: self._env.observation_space}
         )
         spaces = {k: self._convert(v) for k, v in spaces.items()}
-        return {
+        out = {
             **spaces,
             "reward": elements.Space(np.float32),
             "is_first": elements.Space(bool),
@@ -61,6 +61,11 @@ class GymnasiumToEmbodied(embodied.Env):
             "log/distance_traveled": elements.Space(np.float32),
             "log/step_distance": elements.Space(np.float32),
         }
+        # Only present when AdaptiveDifficultyWrapper is active (gym wrappers
+        # forward attribute access, so .difficulty resolves through the chain).
+        if hasattr(self._env, "difficulty"):
+            out["log/difficulty"] = elements.Space(np.float32)
+        return out
 
     @functools.cached_property
     def act_space(self):
@@ -130,6 +135,8 @@ class GymnasiumToEmbodied(embodied.Env):
         obs["log/step_distance"] = np.float32(
             env.longest_step_distance if hasattr(env, "longest_step_distance") else 0
         )
+        if hasattr(env, "difficulty"):
+            obs["log/difficulty"] = np.float32(env.difficulty)
         return obs
 
     def _flatten(self, nest, prefix=None):

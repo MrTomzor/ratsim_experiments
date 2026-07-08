@@ -94,11 +94,11 @@ def _build_gym_env(exp: ExperimentDef, variation: VariationSpec, stage: StageSpe
                    metaseed: int,
                    episode_log_path: "Path | None" = None,
                    run_metadata: "dict | None" = None,
-                   unity_port: int = 9000) -> WildfireGymEnv:
+                   unity_port: int = 9000):
     world_preset_list = resolve_stage_world(stage, variation, exp)
     agent_preset_list = resolve_agent_preset(exp, variation)
     task_preset_list = resolve_task_preset(exp, variation)
-    return WildfireGymEnv(
+    env = WildfireGymEnv(
         worldgen_config=blend_presets("world", world_preset_list),
         agent_config=blend_presets("agents", agent_preset_list),
         sensor_config={},
@@ -109,6 +109,13 @@ def _build_gym_env(exp: ExperimentDef, variation: VariationSpec, stage: StageSpe
         run_metadata=run_metadata,
         unity_port=unity_port,
     )
+    if exp.adaptive_difficulty is not None:
+        from ratsim_wildfire_gym_env.adaptive_difficulty import AdaptiveDifficultyWrapper
+        ad = exp.adaptive_difficulty
+        env = AdaptiveDifficultyWrapper(
+            env, ranges=ad.ranges, success_pickups=ad.success_pickups,
+            step_up=ad.step_up, step_down=ad.step_down, d0=ad.d0)
+    return env
 
 
 def make_env(config, exp, variation, stage, metaseed, index,

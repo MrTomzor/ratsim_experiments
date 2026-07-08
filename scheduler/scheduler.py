@@ -292,6 +292,9 @@ def _read_jsonl_episode_records(jsonl_path: Path) -> list[dict]:
                     "wall_time_s": float(ep["wall_time_s"]),
                     "total_score": float(ep.get("total_score", 0.0)),
                     "objects_found": float(ep.get("objects_found", 0.0)),
+                    # Present only for adaptive_difficulty runs.
+                    "difficulty": (float(ep["difficulty"])
+                                   if ep.get("difficulty") is not None else None),
                 })
     except OSError:
         return []
@@ -968,6 +971,19 @@ def cmd_status(args):
         bar = "█" * done + "·" * (n_stages - done)
         flag = " ✓" if done == n_stages else ""
         print(f"{run.run_id:<{longest}}  {done:>4}/{n_stages:<5}  {bar}{flag}")
+
+        # Adaptive difficulty: per-stage average (and latest) d from the
+        # run's episode log. Only shown when the def enables it.
+        if exp.adaptive_difficulty is not None:
+            records = _read_jsonl_episode_records(run.run_dir / "train_episodes.jsonl")
+            by_stage: dict[int, list[float]] = {}
+            for r in records:
+                if r.get("difficulty") is not None:
+                    by_stage.setdefault(r["stage_idx"], []).append(r["difficulty"])
+            if by_stage:
+                parts = [f"stage {si}: avg {sum(v)/len(v):.2f} (now {v[-1]:.2f}, "
+                         f"{len(v)} eps)" for si, v in sorted(by_stage.items())]
+                print(f"{'':<{longest}}  difficulty  {'  '.join(parts)}")
 
     in_flight = state.get("running", [])
     if in_flight:

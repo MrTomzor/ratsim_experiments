@@ -1,0 +1,59 @@
+# Wells alternation in the orthogonal maze with Avalon-style adaptive difficulty.
+#
+# One scalar d in [0,1] slides the world between the easiest (d=0: 80x80, 5
+# rooms) and hardest (d=1: the maze_ortho_wells base values) endpoints; the
+# agent always spawns at the Home well (base preset, not difficulty-dependent).
+# After each episode d += step_up on success (episode_pickups >=
+# success_pickups), d -= step_down on failure. Symmetric steps hold the agent
+# at ~50% success — its frontier of competence. The per-episode d lands in
+# train_episodes.jsonl as "difficulty".
+#
+# Playtest any difficulty (or the adaptive walk itself) with:
+#   python human_control_test_adaptive.py def=ortho_wells_adaptive difficulty=0.0
+#   python human_control_test_adaptive.py def=ortho_wells_adaptive adaptive=1
+#
+# success_pickups=4: with wells/rewards_per_dispense=3, four pickups prove the
+# agent completed the cued Random trial (3) and returned to Home for >= 1 more.
+#
+# These ranges are the SINGLE source of truth for difficulty (the old
+# ortho_wells_d1..d5 presets were deleted); frozen evals = this def + fixed d
+# values. Coupled integer keys like n_rooms / reward_room/min stay in lockstep
+# under rounding only if their from/to differ by an exact integer offset.
+#
+# adaptive_difficulty is mutually exclusive with a multi-stage world curriculum;
+# stages here only budget steps (single stage).
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: foraging_2000_collision_penalty
+world_preset: maze_ortho_wells
+
+total_steps: 2_000_000
+n_stages: 1
+
+adaptive_difficulty:
+  success_pickups: 4
+  step_up: 0.01
+  step_down: 0.01
+  d0: 0.0
+  ranges:
+    world_bounds/width:         {from: 80,  to: 200, round: 1}
+    world_bounds/height:        {from: 80,  to: 200, round: 1}
+    maze/n_rooms:               {from: 5,   to: 19,  round: 1}
+    maze/rooms/reward_room/min: {from: 3,   to: 17,  round: 1}   # = n_rooms - 2, keep spans equal
+    maze/rooms/reward_room/max: {from: 3,   to: 17,  round: 1}
+    maze/room_max_size_cells:   {from: 15,  to: 31,  round: 1}
+    wells/cue/range:            {from: 135, to: 300}
+    # NOTE: agent spawn is deliberately NOT a range — it stays whatever the base
+    # world preset sets (home_well_room = start at Home) at every difficulty.
+    # To make a categorical/bool key flip at a difficulty threshold, use the
+    # switch_at primitive (value = `below` when d < switch_at, `above` when
+    # d >= switch_at), e.g. to drop the spawn-at-Home scaffold above d=0.4:
+    # agents_spawn_pos/allowed_structures:
+    #   {switch_at: 0.4, below: home_well_room, above: central_chamber}
+
+mode: bfs
+
+methods:
+  - name: ppo
+
+seeds: 1

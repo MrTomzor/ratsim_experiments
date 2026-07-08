@@ -61,6 +61,32 @@ class VariationSpec:
 
 
 @dataclass
+class AdaptiveDifficultySpec:
+    """Avalon-style adaptive difficulty (def block `adaptive_difficulty:`).
+
+    A scalar d in [0,1] slides `ranges` keys over the world config between
+    episodes: +step_up after a success (episode_pickups >= success_pickups),
+    -step_down after a failure. Mutually exclusive with a multi-stage world
+    curriculum — `stages:` keeps only its step-budget role (single stage).
+    Consumed by AdaptiveDifficultyWrapper in ratsim_wildfire_gym_env.
+    """
+    ranges: dict
+    success_pickups: int = 4
+    step_up: float = 0.01
+    step_down: float = 0.01
+    d0: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "ranges": dict(self.ranges),
+            "success_pickups": self.success_pickups,
+            "step_up": self.step_up,
+            "step_down": self.step_down,
+            "d0": self.d0,
+        }
+
+
+@dataclass
 class MethodSpec:
     name: str
     n_seeds: int
@@ -82,6 +108,7 @@ class ExperimentDef:
     mode: str                 # "bfs" or "dfs"
     step_multiplier: float = 1.0
     common_args: dict = field(default_factory=dict)
+    adaptive_difficulty: AdaptiveDifficultySpec | None = None
 
 
 # --- Loading ---------------------------------------------------------------
@@ -177,6 +204,36 @@ def _parse_variations(raw, src: Path) -> list[VariationSpec]:
     return out
 
 
+def _parse_adaptive_difficulty(raw, src: Path) -> "AdaptiveDifficultySpec | None":
+    block = raw.get("adaptive_difficulty")
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise ValueError(f"{src}: `adaptive_difficulty:` must be a mapping")
+    ranges = block.get("ranges")
+    if not isinstance(ranges, dict) or not ranges:
+        raise ValueError(f"{src}: `adaptive_difficulty:` needs a non-empty `ranges:` mapping")
+    for key, spec in ranges.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"{src}: adaptive_difficulty range '{key}' must be a mapping")
+        has_linear = "from" in spec and "to" in spec
+        has_switch = "switch_at" in spec and "below" in spec and "above" in spec
+        if not (has_linear or has_switch):
+            raise ValueError(
+                f"{src}: adaptive_difficulty range '{key}' needs either from/to "
+                f"or switch_at/below/above, got {spec!r}")
+    d0 = float(block.get("d0", 0.0))
+    if not 0.0 <= d0 <= 1.0:
+        raise ValueError(f"{src}: adaptive_difficulty d0 must be in [0, 1], got {d0}")
+    return AdaptiveDifficultySpec(
+        ranges=dict(ranges),
+        success_pickups=int(block.get("success_pickups", 4)),
+        step_up=float(block.get("step_up", 0.01)),
+        step_down=float(block.get("step_down", 0.01)),
+        d0=d0,
+    )
+
+
 def _validate_world_resolves(exp: ExperimentDef) -> None:
     """Every (stage, variation) pair must resolve to a non-empty world_preset."""
     for s_idx, stage in enumerate(exp.stages):
@@ -209,6 +266,22 @@ def build_experiment_def(raw: dict, *, source: Path, exp_id: str) -> ExperimentD
     if mode not in ("bfs", "dfs"):
         raise ValueError(f"{source}: mode must be 'bfs' or 'dfs', got {mode!r}")
 
+    adaptive_difficulty = _parse_adaptive_difficulty(raw, source)
+    if adaptive_difficulty is not None:
+        # Adaptive difficulty IS the world schedule — a staged world curriculum
+        # alongside it would fight over worldgen_config. stages keeps only its
+        # step-budget role.
+        if len(stages) > 1:
+            raise ValueError(
+                f"{source}: `adaptive_difficulty:` is mutually exclusive with a "
+                f"multi-stage curriculum (got {len(stages)} stages). Use a single "
+                f"stage (`total_steps:` alone, or `n_stages: 1`).")
+        if stages[0].world_preset is not None:
+            raise ValueError(
+                f"{source}: with `adaptive_difficulty:`, set the base world via "
+                f"top-level `world_preset:` (not per-stage) — the ranges slide on "
+                f"top of it.")
+
     exp = ExperimentDef(
         exp_id=exp_id,
         source=source,
@@ -221,6 +294,7 @@ def build_experiment_def(raw: dict, *, source: Path, exp_id: str) -> ExperimentD
         mode=mode,
         step_multiplier=float(raw.get("step_multiplier", 1.0)),
         common_args=dict(raw.get("common_args") or {}),
+        adaptive_difficulty=adaptive_difficulty,
     )
     _validate_world_resolves(exp)
     return exp
@@ -334,6 +408,8 @@ def snapshot_experiment(exp: ExperimentDef) -> dict:
         for v in exp.variations
     ]
     out["mode"] = exp.mode
+    if exp.adaptive_difficulty is not None:
+        out["adaptive_difficulty"] = exp.adaptive_difficulty.to_dict()
     if exp.step_multiplier != 1.0:
         out["step_multiplier"] = exp.step_multiplier
     if exp.common_args:
