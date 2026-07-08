@@ -48,7 +48,10 @@ import lstm_fastpath  # noqa: F401
 from ratsim.config_blender import blend_presets
 from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
-from ratsim_wildfire_gym_env.adaptive_difficulty import AdaptiveDifficultyWrapper
+from ratsim_wildfire_gym_env.adaptive_difficulty import (
+    AdaptiveDifficultyWrapper,
+    last_logged_difficulty,
+)
 from feature_extractors import LidarCnnExtractor
 
 from experiment_defs import (
@@ -562,9 +565,16 @@ def main():
                 )
                 if exp.adaptive_difficulty is not None:
                     ad = exp.adaptive_difficulty
+                    # Persist the walk across stages / resumes: seed d from the
+                    # run's cumulative episode log if it has any records.
+                    resumed = last_logged_difficulty(episode_log_path)
+                    d0 = ad.d0 if resumed is None else resumed
+                    if resumed is not None:
+                        print(f"[adaptive_difficulty] resuming difficulty walk at "
+                              f"d={d0:.3f} (from train_episodes.jsonl)")
                     env = AdaptiveDifficultyWrapper(
                         env, ranges=ad.ranges, success_pickups=ad.success_pickups,
-                        step_up=ad.step_up, step_down=ad.step_down, d0=ad.d0)
+                        step_up=ad.step_up, step_down=ad.step_down, d0=d0)
                 return Monitor(env)
             return _make
 

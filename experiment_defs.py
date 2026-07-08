@@ -66,8 +66,10 @@ class AdaptiveDifficultySpec:
 
     A scalar d in [0,1] slides `ranges` keys over the world config between
     episodes: +step_up after a success (episode_pickups >= success_pickups),
-    -step_down after a failure. Mutually exclusive with a multi-stage world
-    curriculum — `stages:` keeps only its step-budget role (single stage).
+    -step_down after a failure. Stages keep their scheduling role (BFS/DFS
+    interleaving + per-stage checkpoints) and the walk persists across them
+    (trainers resume d from train_episodes.jsonl) — but stages must not set
+    their own world_preset: adaptive difficulty is the world schedule.
     Consumed by AdaptiveDifficultyWrapper in ratsim_wildfire_gym_env.
     """
     ranges: dict
@@ -268,19 +270,19 @@ def build_experiment_def(raw: dict, *, source: Path, exp_id: str) -> ExperimentD
 
     adaptive_difficulty = _parse_adaptive_difficulty(raw, source)
     if adaptive_difficulty is not None:
-        # Adaptive difficulty IS the world schedule — a staged world curriculum
-        # alongside it would fight over worldgen_config. stages keeps only its
-        # step-budget role.
-        if len(stages) > 1:
-            raise ValueError(
-                f"{source}: `adaptive_difficulty:` is mutually exclusive with a "
-                f"multi-stage curriculum (got {len(stages)} stages). Use a single "
-                f"stage (`total_steps:` alone, or `n_stages: 1`).")
-        if stages[0].world_preset is not None:
-            raise ValueError(
-                f"{source}: with `adaptive_difficulty:`, set the base world via "
-                f"top-level `world_preset:` (not per-stage) — the ranges slide on "
-                f"top of it.")
+        # Multiple stages are fine WITH adaptive difficulty — they keep their
+        # scheduling role (BFS/DFS interleaving + per-stage checkpoints), and
+        # the difficulty walk persists across stage boundaries (each stage
+        # resumes d from the run's train_episodes.jsonl). What stages must NOT
+        # do here is swap worlds: adaptive difficulty IS the world schedule,
+        # sliding its ranges over the single top-level world_preset.
+        for i, st in enumerate(stages):
+            if st.world_preset is not None:
+                raise ValueError(
+                    f"{source}: with `adaptive_difficulty:`, stage {i} must not set "
+                    f"`world_preset:` — set the base world via top-level "
+                    f"`world_preset:`; the ranges slide on top of it. Stages only "
+                    f"provide scheduling/checkpoint boundaries.")
 
     exp = ExperimentDef(
         exp_id=exp_id,

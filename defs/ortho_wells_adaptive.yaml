@@ -20,18 +20,21 @@
 # values. Coupled integer keys like n_rooms / reward_room/min stay in lockstep
 # under rounding only if their from/to differ by an exact integer offset.
 #
-# adaptive_difficulty is mutually exclusive with a multi-stage world curriculum;
-# stages here only budget steps (single stage).
+# Stages keep their scheduling role (BFS/DFS interleaving + per-stage
+# checkpoints) and the difficulty walk persists across them: each stage resumes
+# d from the last record in train_episodes.jsonl, so n_stages is free to raise.
+# Stages must NOT set their own world_preset though — adaptive difficulty IS
+# the world schedule.
 
 agent_preset: sphereagent_2d_lidar_wells_cue
 task_preset: foraging_2000_collision_penalty
 world_preset: maze_ortho_wells
 
-total_steps: 2_000_000
-n_stages: 1
+total_steps: 9_000_000
+n_stages: 30
 
 adaptive_difficulty:
-  success_pickups: 4
+  success_pickups: 7
   step_up: 0.01
   step_down: 0.01
   d0: 0.0
