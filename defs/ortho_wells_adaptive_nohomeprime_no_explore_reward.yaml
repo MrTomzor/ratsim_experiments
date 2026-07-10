@@ -27,14 +27,14 @@
 # the world schedule.
 
 agent_preset: sphereagent_2d_lidar_wells_cue
-task_preset: volumetric_exploration_2000_collision_penalty
-world_preset: maze_ortho_wells
+task_preset: foraging_2000_collision_penalty
+world_preset: maze_ortho_wells_nohomeprime
 
 total_steps: 9_000_000
 n_stages: 30
 
 adaptive_difficulty:
-  success_pickups: 7
+  success_pickups: 4
   step_up: 0.01
   step_down: 0.01
   d0: 0.0
@@ -57,9 +57,9 @@ adaptive_difficulty:
 mode: bfs
 
 methods:
-  - name: dreamer
-    args:
-      size: size1m        # smaller/faster RSSM for this experiment (default is size12m)
+  # - name: dreamer
+  #   args:
+  #     size: size1m        # smaller/faster RSSM for this experiment (default is size12m)
   - name: ppo
 
 seeds: 1

@@ -27,7 +27,7 @@
 # the world schedule.
 
 agent_preset: sphereagent_2d_lidar_wells_cue
-task_preset: volumetric_exploration_2000_collision_penalty
+task_preset: foraging_2000_collision_penalty
 world_preset: maze_ortho_wells
 
 total_steps: 9_000_000

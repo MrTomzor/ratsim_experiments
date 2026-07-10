@@ -59,10 +59,14 @@ from experiment_defs import (
 )
 
 
-def latest_dreamer_checkpoint(checkpoint_dir: Path) -> tuple[Path, int] | None:
-    """Pick the dreamer checkpoint to eval. Prefer `final/` (whole run done);
-    else the highest `stage_K/` whose `stage_K.done` sibling exists. Each
-    candidate must contain `agent.pkl`.
+def latest_dreamer_checkpoint(
+        checkpoint_dir: Path, n_stages: int) -> tuple[Path, int] | None:
+    """Pick the dreamer checkpoint to eval. Trust `final/` (whole-run snapshot)
+    only when every stage of the *current* def is done — otherwise a `final/`
+    left over from a shorter earlier run (e.g. before the def's stage count was
+    extended) would shadow a newer `stage_K/`. When the run isn't complete at
+    the current stage count, use the highest completed `stage_K/` whose
+    `stage_K.done` sibling exists. Each candidate must contain `agent.pkl`.
 
     Returns (path, stage_idx). For `final`, stage_idx = last completed stage —
     purely informational, used to stamp the eval JSONL records."""
@@ -72,8 +76,10 @@ def latest_dreamer_checkpoint(checkpoint_dir: Path) -> tuple[Path, int] | None:
         int(p.stem.split("_")[1])
         for p in checkpoint_dir.glob("stage_*.done")
     )
+    n_done = sum(1 for k in range(n_stages)
+                 if (checkpoint_dir / f"stage_{k}.done").exists())
     final = checkpoint_dir / "final"
-    if final.is_dir() and (final / "agent.pkl").exists():
+    if n_done >= n_stages and final.is_dir() and (final / "agent.pkl").exists():
         return final, (done_stages[-1] if done_stages else 0)
     for stage_idx in reversed(done_stages):
         d = checkpoint_dir / f"stage_{stage_idx}"
@@ -168,7 +174,7 @@ def main() -> None:
     print(f"[eval-dreamer] world_preset: {world_preset}  (from final stage)")
     print(f"[eval-dreamer] size:         {size}")
 
-    ckpt_info = latest_dreamer_checkpoint(run_dir / "checkpoints")
+    ckpt_info = latest_dreamer_checkpoint(run_dir / "checkpoints", len(exp.stages))
     if ckpt_info is None:
         print(f"[eval-dreamer] ERROR: no completed checkpoints in "
               f"{run_dir / 'checkpoints'} (no final/agent.pkl and no "

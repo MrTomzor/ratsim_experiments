@@ -28,13 +28,13 @@
 
 agent_preset: sphereagent_2d_lidar_wells_cue
 task_preset: volumetric_exploration_2000_collision_penalty
-world_preset: maze_ortho_wells
+world_preset: maze_ortho_wells_nohomeprime
 
 total_steps: 9_000_000
 n_stages: 30
 
 adaptive_difficulty:
-  success_pickups: 7
+  success_pickups: 4
   step_up: 0.01
   step_down: 0.01
   d0: 0.0
@@ -54,7 +54,7 @@ adaptive_difficulty:
     # agents_spawn_pos/allowed_structures:
     #   {switch_at: 0.4, below: home_well_room, above: central_chamber}
 
-mode: bfs
+mode: dfs
 
 methods:
   - name: dreamer

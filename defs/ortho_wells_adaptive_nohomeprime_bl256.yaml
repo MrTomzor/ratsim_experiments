@@ -1,0 +1,47 @@
+# DreamerV3 hyperparameter variant of ortho_wells_adaptive_nohomeprime —
+# only the dreamer method args differ (everything else identical).
+# bl256: flagship — gradient window 48→256, covers a full random→home cycle
+# at low difficulty, so memory write→use gets direct end-to-end gradient.
+# replay_context stays at the train script's default (16) on purpose, so the
+# ONLY delta vs the base experiment is method.batch_length=256.
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_ortho_wells_nohomeprime
+
+total_steps: 9_000_000
+n_stages: 30
+
+adaptive_difficulty:
+  success_pickups: 4
+  step_up: 0.01
+  step_down: 0.01
+  d0: 0.0
+  ranges:
+    world_bounds/width:         {from: 80,  to: 200, round: 1}
+    world_bounds/height:        {from: 80,  to: 200, round: 1}
+    maze/n_rooms:               {from: 5,   to: 19,  round: 1}
+    maze/rooms/reward_room/min: {from: 3,   to: 17,  round: 1}   # = n_rooms - 2, keep spans equal
+    maze/rooms/reward_room/max: {from: 3,   to: 17,  round: 1}
+    maze/room_max_size_cells:   {from: 15,  to: 31,  round: 1}
+    wells/cue/range:            {from: 135, to: 300}
+    # NOTE: agent spawn is deliberately NOT a range — it stays whatever the base
+    # world preset sets (home_well_room = start at Home) at every difficulty.
+    # To make a categorical/bool key flip at a difficulty threshold, use the
+    # switch_at primitive (value = `below` when d < switch_at, `above` when
+    # d >= switch_at), e.g. to drop the spawn-at-Home scaffold above d=0.4:
+    # agents_spawn_pos/allowed_structures:
+    #   {switch_at: 0.4, below: home_well_room, above: central_chamber}
+
+mode: dfs
+
+methods:
+  - name: dreamer
+    args:
+      size: size1m        # smaller/faster RSSM for this experiment (default is size12m)
+      method.batch_length: 256
+  # ppo baseline deliberately omitted — it would be identical to the run in the
+  # base def ortho_wells_adaptive_nohomeprime; uncomment to re-run it.
+  # - name: ppo
+
+seeds: 1

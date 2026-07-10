@@ -17,6 +17,10 @@ Usage
     python test_dreamerv3.py def=houses_volex_1m model=... \\
         stage=last eval_seeds=1,2,3 episodes_per_seed=2
 
+    # Fix the adaptive-difficulty world at a target difficulty in [0, 1]
+    # (requires the def to have an `adaptive_difficulty:` block):
+    python test_dreamerv3.py def=houses_volex_1m model=... difficulty=0.7
+
     # GPU
     python test_dreamerv3.py def=... model=... method.jax.platform=cuda
 
@@ -79,6 +83,7 @@ def make_episode_result(
     distance: float,
     wall_time: float,
     ablate_memory: bool = False,
+    difficulty: float | None = None,
 ) -> dict:
     return {
         "method": "dreamerv3",
@@ -94,6 +99,7 @@ def make_episode_result(
         "distance_traveled": distance,
         "wall_time_s": wall_time,
         "ablate_memory": ablate_memory,
+        "difficulty": difficulty,
     }
 
 
@@ -135,6 +141,7 @@ def eval_stage(
     episodes_per_seed: int,
     results_file: Path,
     ablate_memory: bool = False,
+    difficulty: float | None = None,
 ) -> None:
     # Seed injection: the embodied adapter calls gym_env.reset() without
     # options. We patch reset() to consume a pending seed set by the eval loop
@@ -222,6 +229,7 @@ def eval_stage(
                 distance=distance,
                 wall_time=wall_time,
                 ablate_memory=ablate_memory,
+                difficulty=difficulty,
             )
             append_result(results_file, result)
             print(
@@ -258,6 +266,13 @@ def main():
     size = overrides.pop("size", DEFAULT_SIZE)
     ablate_memory = str(overrides.pop("ablate-memory", "0")).lower() in (
         "1", "true", "yes", "y")
+    difficulty_raw = overrides.pop("difficulty", None)
+    difficulty = None
+    if difficulty_raw is not None:
+        difficulty = float(difficulty_raw)
+        if not 0.0 <= difficulty <= 1.0:
+            print(f"Error: difficulty must be in [0, 1], got {difficulty}")
+            sys.exit(1)
 
     if def_arg is not None:
         def_path = resolve_def_path(DEFS_DIR, def_arg)
@@ -270,6 +285,9 @@ def main():
         variation = find_variation(exp, variation_name)
         agent_preset = resolve_agent_preset(exp, variation)
         task_preset = resolve_task_preset(exp, variation)
+        difficulty_ranges = (
+            exp.adaptive_difficulty.ranges
+            if exp.adaptive_difficulty is not None else None)
 
         if stage_arg == "all":
             stage_indices = list(range(len(exp.stages)))
@@ -294,6 +312,7 @@ def main():
         stage_indices = [0]
         stage_world_presets = [world_preset]
         run_label = "_".join(world_preset)
+        difficulty_ranges = None
 
     ablation_suffix = "_ablated" if ablate_memory else ""
     run_name = overrides.pop(
@@ -324,6 +343,19 @@ def main():
     task_config = blend_presets("task", task_preset)
     stage_world_configs = [blend_presets("world", wp) for wp in stage_world_presets]
 
+    # Fixed target difficulty: bake the adaptive-difficulty ranges, evaluated at
+    # d, into each stage's world config. Unlike training there is no walk here —
+    # d is held constant so every episode is generated at the requested level.
+    if difficulty is not None:
+        if difficulty_ranges is None:
+            print("Error: difficulty=<d> requires a def with an "
+                  "`adaptive_difficulty:` block (no ranges to interpolate).")
+            sys.exit(1)
+        from ratsim_wildfire_gym_env.adaptive_difficulty import interpolate_ranges
+        d_overrides = interpolate_ranges(difficulty_ranges, difficulty)
+        stage_world_configs = [{**wc, **d_overrides} for wc in stage_world_configs]
+        print(f"Fixed difficulty d={difficulty:.3f} -> world overrides: {d_overrides}")
+
     results_dir = Path(__file__).parent / "results" / run_name
     results_dir.mkdir(parents=True, exist_ok=True)
     results_file = results_dir / "episodes.jsonl"
@@ -350,6 +382,7 @@ def main():
                 "size": size,
                 "method_overrides": method_overrides,
                 "ablate_memory": ablate_memory,
+                "difficulty": difficulty,
                 "run_name": run_name,
             },
             f,
@@ -441,6 +474,7 @@ def main():
                 episodes_per_seed=episodes_per_seed,
                 results_file=results_file,
                 ablate_memory=ablate_memory,
+                difficulty=difficulty,
             )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")

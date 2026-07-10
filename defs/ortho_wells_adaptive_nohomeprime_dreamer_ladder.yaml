@@ -1,0 +1,62 @@
+# DreamerV3 memory-hyperparameter ladder on ortho_wells_adaptive_nohomeprime:
+# the 4 dreamer variants run as `variations:` of ONE experiment, so the
+# scheduler expands them into 4 runs (run dirs: consec4__dreamer__seed0,
+# bl128__dreamer__seed0, bl256__dreamer__seed0, bl256_c2__dreamer__seed0).
+# Listing `- name: dreamer` twice under `methods:` is NOT supported — run_id is
+# "<variation>__<method>__seed<i>", so duplicate method names collide on the
+# same run dir/state; variations + method_args is the supported mechanism.
+# variation method_args use RAW dreamerv3 config keys (no `method.` prefix,
+# unlike method-entry args) — train_dreamerv3.py reads them from the def and
+# applies them last in build_config, overriding its hardcoded batch_length=48.
+# replay_context stays at the script default (16), so the only deltas per cell
+# are the keys stated below. Base/control cell = the ortho_wells_adaptive_
+# nohomeprime experiment itself (not re-run here).
+# DREAMER-ONLY: do NOT add a ppo method entry — train.py feeds
+# variation.method_args straight into the SB3 model constructor kwargs, so
+# dreamer keys like consec_train would crash PPO with a TypeError.
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_ortho_wells_nohomeprime
+
+total_steps: 9_000_000
+n_stages: 30
+
+adaptive_difficulty:
+  success_pickups: 4
+  step_up: 0.01
+  step_down: 0.01
+  d0: 0.0
+  ranges:
+    world_bounds/width:         {from: 80,  to: 200, round: 1}
+    world_bounds/height:        {from: 80,  to: 200, round: 1}
+    maze/n_rooms:               {from: 5,   to: 19,  round: 1}
+    maze/rooms/reward_room/min: {from: 3,   to: 17,  round: 1}   # = n_rooms - 2, keep spans equal
+    maze/rooms/reward_room/max: {from: 3,   to: 17,  round: 1}
+    maze/room_max_size_cells:   {from: 15,  to: 31,  round: 1}
+    wells/cue/range:            {from: 135, to: 300}
+    # NOTE: agent spawn is deliberately NOT a range — it stays whatever the base
+    # world preset sets (home_well_room = start at Home) at every difficulty.
+    # To make a categorical/bool key flip at a difficulty threshold, use the
+    # switch_at primitive (value = `below` when d < switch_at, `above` when
+    # d >= switch_at), e.g. to drop the spawn-at-Home scaffold above d=0.4:
+    # agents_spawn_pos/allowed_structures:
+    #   {switch_at: 0.4, below: home_well_room, above: central_chamber}
+
+# bfs interleaves stages across the 4 variants so partial results stay
+# comparable at equal step counts (flip to dfs to finish one variant at a time).
+mode: bfs
+
+methods:
+  - name: dreamer
+    args:
+      size: size1m        # applies to ALL variations; smaller/faster RSSM (default is size12m)
+
+variations:
+  # RAW config keys here (no `method.` prefix) — read by train_dreamerv3.py directly.
+  - {name: consec4,  method_args: {consec_train: 4}}                       # 192-step fresh-carry chains, gradient window still 48
+  - {name: bl128,    method_args: {batch_length: 128}}                     # gradient window ≈ one trial leg at low difficulty
+  - {name: bl256,    method_args: {batch_length: 256}}                     # flagship: window covers a full random→home cycle at low d
+  - {name: bl256_c2, method_args: {batch_length: 256, consec_train: 2}}    # production candidate: 256 window + 512-step continuity
+
+seeds: 1

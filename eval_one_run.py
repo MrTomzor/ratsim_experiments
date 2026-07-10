@@ -61,10 +61,15 @@ SB3_METHODS = {"ppo", "recurrent_ppo", "cnn_ppo", "cnn_recurrent_ppo"}
 RECURRENT_METHODS = {"recurrent_ppo", "cnn_recurrent_ppo"}
 
 
-def latest_sb3_checkpoint(checkpoint_dir: Path) -> tuple[Path, int] | None:
-    """Pick the checkpoint to eval. Prefers final.zip (whole run done);
-    falls back to the highest stage_K.zip whose stage_K.done sibling exists
-    (so half-finished runs still eval their last fully-saved stage).
+def latest_sb3_checkpoint(
+        checkpoint_dir: Path, n_stages: int) -> tuple[Path, int] | None:
+    """Pick the checkpoint to eval. Trust final.zip (whole-run checkpoint) only
+    when every stage of the *current* def is done — otherwise a final.zip left
+    over from a shorter earlier run (e.g. before the def's stage count was
+    extended) would shadow a newer stage_K.zip. When the run isn't complete at
+    the current stage count, fall back to the highest stage_K.zip whose
+    stage_K.done sibling exists (so half-finished runs still eval their last
+    fully-saved stage).
 
     Returns (path, stage_idx). stage_idx is informational — used to stamp
     the eval JSONL records so the analyzer knows which stage was eval'd.
@@ -75,10 +80,13 @@ def latest_sb3_checkpoint(checkpoint_dir: Path) -> tuple[Path, int] | None:
         int(p.stem.split("_")[1])
         for p in checkpoint_dir.glob("stage_*.done")
     )
+    n_done = sum(1 for k in range(n_stages)
+                 if (checkpoint_dir / f"stage_{k}.done").exists())
     final = checkpoint_dir / "final.zip"
-    if final.exists() and done_stages:
+    if n_done >= n_stages and final.exists() and done_stages:
         return final, done_stages[-1]
-    # No final.zip — pick highest-stage .zip with a matching .done.
+    # final.zip absent or run not complete at current stage count — pick
+    # highest-stage .zip with a matching .done.
     candidates = []
     for stage_idx in done_stages:
         zp = checkpoint_dir / f"stage_{stage_idx}.zip"
@@ -155,7 +163,7 @@ def main() -> None:
     print(f"[eval] task_preset:  {task_preset}")
     print(f"[eval] world_preset: {world_preset}  (from final stage)")
 
-    ckpt_info = latest_sb3_checkpoint(run_dir / "checkpoints")
+    ckpt_info = latest_sb3_checkpoint(run_dir / "checkpoints", len(exp.stages))
     if ckpt_info is None:
         print(f"[eval] ERROR: no completed checkpoints in "
               f"{run_dir / 'checkpoints'} (no final.zip and no stage_K.zip "
