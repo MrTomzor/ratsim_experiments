@@ -60,6 +60,9 @@ class GymnasiumToEmbodied(embodied.Env):
             "log/reward_pickups": elements.Space(np.float32),
             "log/distance_traveled": elements.Space(np.float32),
             "log/step_distance": elements.Space(np.float32),
+            # Cumulative within the episode; the per-episode `max` aggregate is
+            # the final explored area (mirrors PPO's custom/avg_explored_area_m2).
+            "log/explored_area_m2": elements.Space(np.float32),
         }
         # Only present when AdaptiveDifficultyWrapper is active (gym wrappers
         # forward attribute access, so .difficulty resolves through the chain).
@@ -124,19 +127,28 @@ class GymnasiumToEmbodied(embodied.Env):
             is_last=is_last,
             is_terminal=is_terminal,
         )
-        # Populate log/ metrics from the underlying gym env.
-        env = self._env
+        # Populate log/ metrics from the underlying gym env. Use .unwrapped:
+        # gymnasium >= 1.0 removed implicit attribute forwarding through
+        # wrappers (AttributeError), so reading these off a wrapped env (e.g.
+        # AdaptiveDifficultyWrapper) silently yielded the 0 fallback.
+        base = self._env.unwrapped
         obs["log/reward_pickups"] = np.float32(
-            env.get_reward_pickups() if hasattr(env, "get_reward_pickups") else 0
+            base.get_reward_pickups() if hasattr(base, "get_reward_pickups") else 0
         )
         obs["log/distance_traveled"] = np.float32(
-            env.get_distance_traveled() if hasattr(env, "get_distance_traveled") else 0
+            base.get_distance_traveled() if hasattr(base, "get_distance_traveled") else 0
         )
         obs["log/step_distance"] = np.float32(
-            env.longest_step_distance if hasattr(env, "longest_step_distance") else 0
+            base.longest_step_distance if hasattr(base, "longest_step_distance") else 0
         )
-        if hasattr(env, "difficulty"):
-            obs["log/difficulty"] = np.float32(env.difficulty)
+        obs["log/explored_area_m2"] = np.float32(
+            base.task_tracker.get_explored_area_m2()
+            if hasattr(base, "task_tracker") else 0
+        )
+        # difficulty lives on the wrapper itself (not the base env), so read
+        # it from the outer env — own attributes don't need forwarding.
+        if hasattr(self._env, "difficulty"):
+            obs["log/difficulty"] = np.float32(self._env.difficulty)
         return obs
 
     def _flatten(self, nest, prefix=None):
