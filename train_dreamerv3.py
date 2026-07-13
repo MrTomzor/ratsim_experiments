@@ -122,9 +122,15 @@ def _build_gym_env(exp: ExperimentDef, variation: VariationSpec, stage: StageSpe
         if resumed is not None:
             print(f"[adaptive_difficulty] resuming difficulty walk at d={d0:.3f} "
                   f"(from train_episodes.jsonl)")
+        # shared: one walk for all envs, file-backed next to the episode log
+        # (d0 / the jsonl resume above only seed the file if it doesn't exist).
+        state_path = None
+        if ad.shared and episode_log_path is not None:
+            state_path = Path(episode_log_path).parent / "difficulty_state.txt"
         env = AdaptiveDifficultyWrapper(
             env, ranges=ad.ranges, success_pickups=ad.success_pickups,
-            step_up=ad.step_up, step_down=ad.step_down, d0=d0)
+            step_up=ad.step_up, step_down=ad.step_down, d0=d0,
+            state_path=state_path)
     return env
 
 

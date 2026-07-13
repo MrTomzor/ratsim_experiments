@@ -70,6 +70,9 @@ class AdaptiveDifficultySpec:
     interleaving + per-stage checkpoints) and the walk persists across them
     (trainers resume d from train_episodes.jsonl) — but stages must not set
     their own world_preset: adaptive difficulty is the world schedule.
+    All parallel envs of a run share ONE walk by default (file-backed with
+    flock, persists across stages — the file subsumes the jsonl resume); set
+    `shared: false` for the legacy behavior of an independent walk per env.
     Consumed by AdaptiveDifficultyWrapper in ratsim_wildfire_gym_env.
     """
     ranges: dict
@@ -77,6 +80,7 @@ class AdaptiveDifficultySpec:
     step_up: float = 0.01
     step_down: float = 0.01
     d0: float = 0.0
+    shared: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +89,7 @@ class AdaptiveDifficultySpec:
             "step_up": self.step_up,
             "step_down": self.step_down,
             "d0": self.d0,
+            "shared": self.shared,
         }
 
 
@@ -233,6 +238,7 @@ def _parse_adaptive_difficulty(raw, src: Path) -> "AdaptiveDifficultySpec | None
         step_up=float(block.get("step_up", 0.01)),
         step_down=float(block.get("step_down", 0.01)),
         d0=d0,
+        shared=bool(block.get("shared", True)),
     )
 
 
