@@ -3,4 +3,6 @@
 !.gitignore
 !default.yaml
 !gpu_example.yaml
+# rci.yaml is a shared CTU cluster, not a personal box
+!rci.yaml
 !README.md

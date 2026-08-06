@@ -1,0 +1,83 @@
+# RCI cluster (CTU) machine config — one SLURM job hosting the scheduler.
+#
+#   sbatch rci_port_probes/scheduler_job.sbatch <exp>
+#   # or by hand, inside a job:
+#   export RATSIM_SCHEDULER_MACHINE=rci
+#   python scheduler_run.py <exp>
+#
+# Assumes the allocation the sbatch wrapper requests:
+#   --cpus-per-task=16 --gres=gpu:1 --mem=64G
+# `resources` below must match it. SLURM hands you a *fraction of a node* and
+# cgroup-limits you to it, so asking for more cpu_slot than --cpus-per-task just
+# oversubscribes your own cgroup and makes every run slower.
+#
+# ---------------------------------------------------------------------------
+# Sizing rationale — measured on gpufast (Xeon Gold 6150 @ 2.70 GHz, V100), see
+# RCI_CLUSTER_PORT.md §0.6. Two numbers drive everything here:
+#
+#   raw sim FPS by CPUs allocated:  1 -> 386,  4 -> 1203,  8 -> 1672, 16 -> 1877
+#   PPO training fps (n_envs=1):    4 -> 232,                        16 -> 280
+#
+# So a single run stops benefiting from cores at about 4: going 4 -> 16 buys
+# +56% on raw stepping but only +20% on training, because the bottleneck moves
+# to the single-threaded Python side (env wrapper, obs assembly, policy
+# forward). Packing four 4-slot runs into 16 cores therefore beats one fat run
+# by roughly 3x aggregate throughput. Hence cpu_slot: 16 with needs.cpu_slot: 4.
+#
+# This is also why n_envs is 1 everywhere below, unlike default.yaml (4) and
+# gpu_example.yaml (8). Two reasons:
+#   * per-step latency here is CPU-clock-bound, so concurrent *runs* buy the
+#     same throughput as vectorized envs without SubprocVecEnv overhead;
+#   * n_envs>1 has never been run in a SLURM job. Raising it is the first thing
+#     to try once someone verifies it, not something to ship untested.
+#
+# A single run is ~3x SLOWER here than on the laptop (fps 232-280 vs 816). The
+# cluster wins on parallelism and wall-clock limits, not per-run speed — so
+# prefer many concurrent runs and a long partition over a big allocation.
+#
+# Partition note: gpufast caps at 4h, which suits smoke tests only. Real
+# experiments want `gpu` (1 day), `gpulong` (3 days) or `gpuextralong` (21
+# days) — and since checkpoints currently land only at stage boundaries, a run
+# that outlives its wall-clock loses the current stage's progress.
+# ---------------------------------------------------------------------------
+
+resources:
+  gpu: 1
+  cpu_slot: 16
+
+method_profiles:
+  ppo:
+    needs:
+      cpu_slot: 4
+    n_envs: 1
+    args:
+      # CPU beats GPU for a small MLP at n_envs=1: per-step host<->device
+      # transfer costs more than the forward pass saves. Leaves the V100 free
+      # for a dreamer run alongside.
+      method.device: cpu
+
+  recurrent_ppo:
+    needs:
+      gpu: 1
+      cpu_slot: 4
+    n_envs: 1
+    args:
+      method.device: cuda
+
+  dreamer:
+    needs:
+      gpu: 1
+      cpu_slot: 4
+    n_envs: 1
+    # Known unfixed leak (~6-8 KB/env-step in the train process); the scheduler
+    # SIGTERMs and re-dispatches at this threshold. Keep --mem comfortably above
+    # it or SLURM's own OOM killer gets there first and the run just dies.
+    max_ram_gb: 30
+    args:
+      method.jax.platform: cuda
+      # dreamerv3 defaults to compute_dtype: bfloat16 (dreamerv3/configs.yaml).
+      # The V100 is sm_70 (Volta) and has NO native bf16 path, so that default
+      # gets emulated rather than accelerated. float16 is the Volta choice.
+      # NOTE: torch.cuda.is_bf16_supported() reports True on this GPU anyway,
+      # so don't take that as evidence the default is fine.
+      method.jax.compute_dtype: float16
