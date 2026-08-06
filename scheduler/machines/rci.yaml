@@ -75,9 +75,15 @@ method_profiles:
     max_ram_gb: 30
     args:
       method.jax.platform: cuda
-      # dreamerv3 defaults to compute_dtype: bfloat16 (dreamerv3/configs.yaml).
-      # The V100 is sm_70 (Volta) and has NO native bf16 path, so that default
-      # gets emulated rather than accelerated. float16 is the Volta choice.
-      # NOTE: torch.cuda.is_bf16_supported() reports True on this GPU anyway,
-      # so don't take that as evidence the default is fine.
-      method.jax.compute_dtype: float16
+      # NO compute_dtype override -- keep dreamerv3's bfloat16 default.
+      #
+      # Measured on a V100 (sm_70), 10k-step run each, one variable changed:
+      #   bfloat16 (default) -> exit 0, fps/train 2039.8, fps/policy 67.3
+      #   float16            -> exit 1, TypeError: "Argument types differ from
+      #                         the types for which this computation was compiled"
+      #
+      # This is the opposite of what "Volta has no native bf16" suggests. Volta
+      # lacking bf16 *tensor cores* does not stop XLA emulating the dtype
+      # correctly, and dreamerv3's graph evidently pins bfloat16 somewhere that
+      # a float16 compute_dtype then contradicts. Don't "optimise" this back to
+      # float16 without re-running that comparison.
