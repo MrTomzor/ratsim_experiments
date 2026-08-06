@@ -51,6 +51,7 @@ except ImportError:
 from . import config as cfg
 from . import runs as runs_mod
 from .ports import PortAllocator
+from ratsim.unity_launcher import default_base_port, _slurm_job_id
 
 
 SCHEDULER_DIR = Path(__file__).parent
@@ -674,6 +675,14 @@ def cmd_run(args):
     # n_envs>1 (e.g. the default's 4) would never qualify for the slot and
     # silently land on a headless 9100+ window instead.
     use_port_9000 = bool(getattr(args, "use_port_9000", False))
+    # Refuse the persistent slot on a shared cluster node. Its whole premise is
+    # "attach to the Unity *I* launched on 9000 so I can watch it" — on a node
+    # shared with other users, an open 9000 is far more likely to be a
+    # stranger's, and we would silently train against their simulator.
+    if use_port_9000 and _slurm_job_id() is not None:
+        print("[scheduler] --use-port-9000 ignored: running under SLURM "
+              f"(job {_slurm_job_id()}), where :9000 may belong to another user.")
+        use_port_9000 = False
     if use_port_9000:
         for name, profile in machine.method_profiles.items():
             if profile.n_envs != 1:
@@ -739,7 +748,9 @@ def cmd_run(args):
           f"{sum(m.n_seeds for m in exp.methods)} method-seeds)")
 
     rm = ResourceManager(machine.resources)
-    port_alloc = PortAllocator(start=9100, window_size=10,
+    # start= is 9100 on a laptop and a job-derived window under SLURM, so two
+    # schedulers co-scheduled on one node don't both hand out 9100.
+    port_alloc = PortAllocator(start=default_base_port(), window_size=10,
                                persistent_port=9000 if use_port_9000 else None)
     if use_port_9000:
         print(f"[scheduler] --use-port-9000 enabled: port 9000 will be "
