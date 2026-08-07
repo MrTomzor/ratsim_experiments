@@ -30,8 +30,8 @@ agent_preset: sphereagent_2d_lidar_wells_cue
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: maze_ortho_wells
 
-total_steps: 9_000_000
-n_stages: 30
+total_steps: 3_000_000
+n_stages: 10
 
 adaptive_difficulty:
   success_pickups: 7
@@ -60,6 +60,7 @@ methods:
   - name: dreamer
     args:
       size: size1m        # smaller/faster RSSM for this experiment (default is size12m)
+      method.consec_train: 4
   - name: ppo
 
-seeds: 1
+seeds: 3
