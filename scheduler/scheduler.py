@@ -50,6 +50,7 @@ except ImportError:
 
 from . import config as cfg
 from . import runs as runs_mod
+from .gpus import GpuAllocator
 from .ports import PortAllocator
 from ratsim.unity_launcher import default_base_port, _slurm_job_id
 
@@ -107,6 +108,10 @@ class ActiveJob:
     # attach-to-9000 path; release() routing on the allocator also depends
     # on this.
     is_persistent: bool = False
+    # CUDA device ids handed to this job by the GpuAllocator (empty for CPU
+    # jobs, and for every job on a machine that declares no GPUs). Held here
+    # so the reaping path can return them to the pool.
+    gpu_ids: list[str] = field(default_factory=list)
 
 
 class ResourceManager:
@@ -587,16 +592,28 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
               port_base: int, exp: cfg.ExperimentDef,
               step_multiplier: float,
               is_persistent: bool = False,
-              show_console: bool = False) -> ActiveJob:
+              show_console: bool = False,
+              gpu_ids: list[str] | None = None,
+              gpu_alloc: GpuAllocator | None = None) -> ActiveJob:
     cmd = build_command(run, stage_idx, profile, port_base, exp, step_multiplier,
                         is_persistent=is_persistent)
+    gpu_ids = list(gpu_ids or [])
+    # None means "inherit our environment", which is what happens on a machine
+    # declaring no GPUs — the laptop path stays byte-identical to before.
+    child_env = gpu_alloc.child_env(gpu_ids) if gpu_alloc is not None else None
     log_dir = run.run_dir / "scheduler_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"stage_{stage_idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
     port_label = f"{port_base} (persistent)" if is_persistent else str(port_base)
+    if child_env is None:
+        gpu_label = ""
+    elif gpu_ids:
+        gpu_label = f" gpu={','.join(gpu_ids)}"
+    else:
+        gpu_label = " gpu=none(masked)"
     print(f"[scheduler] dispatch {run.run_id} stage {stage_idx} "
-          f"port={port_label} n_envs={run.method.n_envs}")
+          f"port={port_label} n_envs={run.method.n_envs}{gpu_label}")
     print(f"[scheduler]   log: {log_path}")
     print(f"[scheduler]   cmd: {' '.join(cmd)}")
 
@@ -614,6 +631,7 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
             bufsize=1,
             text=True,
             preexec_fn=os.setsid,
+            env=child_env,
         )
         prefix = f"[{run.run_id} s{stage_idx}] "
 
@@ -638,11 +656,12 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
             # Own process group so SIGINT to scheduler doesn't auto-propagate.
             # We forward it manually on graceful shutdown.
             preexec_fn=os.setsid,
+            env=child_env,
         )
     return ActiveJob(
         run=run, stage_idx=stage_idx, popen=popen, port_base=port_base,
         profile=profile, started_at=datetime.now(), log_path=log_path,
-        is_persistent=is_persistent,
+        is_persistent=is_persistent, gpu_ids=gpu_ids,
     )
 
 
@@ -752,11 +771,30 @@ def cmd_run(args):
           f"({len(exp.variations)} variations × {len(exp.methods)} methods × "
           f"{sum(m.n_seeds for m in exp.methods)} method-seeds)")
 
-    rm = ResourceManager(machine.resources)
+    gpu_alloc = GpuAllocator.from_environment(machine.resources.get("gpu", 0))
+    # Capacity is the *smaller* of what the config declares and what the pool
+    # actually holds — both directions of disagreement are handled, and
+    # neither silently escalates.
+    #
+    # Clamping down matters because otherwise a config declaring more GPUs than
+    # the allocation granted would keep offering candidates the pool can't
+    # serve, and the dispatch loop would warn on every poll forever. Not
+    # clamping up matters more: `gpu: 1` in a machine config is a deliberate
+    # ceiling (see rci_gpu.yaml), so an sbatch that over-asked must not quietly
+    # widen it. GpuAllocator.from_environment already warned about the
+    # mismatch; the fix belongs in --gres or the config, not here.
+    resources = dict(machine.resources)
+    if gpu_alloc.active:
+        resources["gpu"] = min(resources.get("gpu", 0), len(gpu_alloc.devices))
+    rm = ResourceManager(resources)
     # start= is 9100 on a laptop and a job-derived window under SLURM, so two
     # schedulers co-scheduled on one node don't both hand out 9100.
     port_alloc = PortAllocator(start=default_base_port(), window_size=10,
                                persistent_port=9000 if use_port_9000 else None)
+    if gpu_alloc.active:
+        print(f"[scheduler] GPU pool: {', '.join(gpu_alloc.devices)} "
+              f"(CUDA_VISIBLE_DEVICES is set per child; jobs with no "
+              f"needs.gpu are masked off the GPUs entirely)")
     if use_port_9000:
         print(f"[scheduler] --use-port-9000 enabled: port 9000 will be "
               f"handed to one n_envs=1 dispatch when Unity is alive there. "
@@ -828,6 +866,7 @@ def cmd_run(args):
                 continue
             rm.release(job.profile.needs)
             port_alloc.release(job.port_base)
+            gpu_alloc.release(job.gpu_ids)
             active.remove(job)
             duration = (datetime.now() - job.started_at).total_seconds()
             if job.ram_killed:
@@ -915,9 +954,23 @@ def cmd_run(args):
                     is_persistent = True
             if port_base is None:
                 port_base = port_alloc.alloc()
+            # rm.can_allocate() already confirmed a gpu unit is free, so this
+            # should never come back None — but the two track the same thing in
+            # separate places, and a leaked device would otherwise dispatch a
+            # job onto an empty CUDA_VISIBLE_DEVICES and fail confusingly.
+            # Give the port back and try the next candidate instead.
+            gpu_ids = gpu_alloc.alloc(profile.needs.get("gpu", 0))
+            if gpu_ids is None:
+                print(f"[scheduler] WARNING: {run.run_id} needs "
+                      f"{profile.needs.get('gpu')} GPU(s) but the pool has "
+                      f"{len(gpu_alloc.free)} free — resource accounting and "
+                      f"GPU pool disagree. Skipping this dispatch.")
+                port_alloc.release(port_base)
+                continue
             job = spawn_job(run, stage_idx, profile, port_base, exp,
                             step_multiplier, is_persistent=is_persistent,
-                            show_console=show_console)
+                            show_console=show_console, gpu_ids=gpu_ids,
+                            gpu_alloc=gpu_alloc)
             rm.allocate(profile.needs)
             active.append(job)
             in_flight.add((run.run_id, stage_idx))
@@ -926,6 +979,7 @@ def cmd_run(args):
                 "stage_idx": stage_idx,
                 "pid": job.popen.pid,
                 "port_base": port_base,
+                **({"gpus": gpu_ids} if gpu_ids else {}),
                 "started_at": job.started_at.isoformat(timespec="seconds"),
                 "log_path": str(job.log_path.relative_to(exp_dir)),
             })

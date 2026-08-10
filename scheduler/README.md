@@ -300,6 +300,47 @@ port window starting at `base_port`). Validation catches this at startup.
 For inline ad-hoc training (`python train.py method=ppo ... n_envs=8`),
 just pass `n_envs=N` on the CLI — the train scripts default it to 1.
 
+## GPUs
+
+Children are plain subprocesses inside one job, so without intervention they'd
+all inherit the same `CUDA_VISIBLE_DEVICES` and pile onto device 0 while the
+other cards sat idle — the port-collision problem, one resource over.
+`GpuAllocator` (`scheduler/gpus.py`) is the fix: it hands each dispatch its own
+device and sets `CUDA_VISIBLE_DEVICES` for that child alone.
+
+The pool comes from the job's own `CUDA_VISIBLE_DEVICES` when set. Under SLURM
+with cgroup device isolation the job only *sees* the GPUs it was granted and
+that variable lists exactly them, so each entry means the same device to a child
+as it does to the scheduler. With the variable unset it falls back to
+`range(resources.gpu)`. Ids are passed through as strings, so GPU-UUID form
+works too.
+
+```
+[scheduler] GPU pool: 0, 1, 2, 3 (CUDA_VISIBLE_DEVICES is set per child; ...)
+[scheduler] dispatch baseline__dreamer__seed0 stage 0 port=9100 n_envs=4 gpu=0
+[scheduler] dispatch baseline__ppo__seed0     stage 0 port=9110 n_envs=4 gpu=none(masked)
+```
+
+Three behaviours worth knowing:
+
+- **A method with no `needs.gpu` is masked off the GPUs entirely**
+  (`CUDA_VISIBLE_DEVICES=""`), not left to inherit the job's list. Otherwise a
+  CPU-profile PPO run still opens a context on whichever card it likes and takes
+  memory from the dreamer beside it. **If a method genuinely needs the GPU,
+  declare `needs: {gpu: 1}`** — that declaration is what this reads.
+- **On a machine config that declares no GPUs, nothing is touched at all.** The
+  child inherits the environment exactly as before, so laptop runs are
+  unaffected.
+- **Capacity is the smaller of `resources.gpu` and the GPUs actually granted.**
+  Declaring fewer than `--gres` gave keeps a deliberate cap (the scheduler will
+  not widen it because the sbatch over-asked); declaring more gets clamped so
+  the loop doesn't keep offering candidates the pool can't serve. Either
+  mismatch warns at startup.
+
+To run N GPU jobs at once, `--gres=gpu:N`, `resources.gpu: N` and enough
+`cpu_slot` for N runs all have to move together — `cpu_slot` binds
+independently, so `gpu: 4` with `cpu_slot: 31` still only fits one 16-slot run.
+
 ## Unity ports
 
 Every dispatch gets a fresh non-overlapping port window starting at 9100,

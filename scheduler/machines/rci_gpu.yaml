@@ -20,8 +20,7 @@
 #
 # 31 threads at the pinned n_envs=4 (~4 threads per env, see rci.yaml) is one
 # GPU run plus one PPO run alongside it, which is what the profiles below
-# encode. If you want N dreamers, ask for N GPUs and 31*N threads — but read
-# the gpu: 1 note first.
+# encode. For N dreamers, see "Scaling to several GPUs" below.
 #
 # ⚠️ UNVERIFIED SIZING. The A100 dreamer timing is measured (§0.56: 152 s on a
 # 10k-step run, 1.25x a V100, identical at n_envs=1 and n_envs=4), but running
@@ -29,13 +28,24 @@
 # 7-wide PPO job was. Treat the concurrency numbers here as a starting point.
 #
 # ---------------------------------------------------------------------------
-# gpu: 1 is a LIMIT, not a description of the node.
+# Scaling to several GPUs in one job.
 #
-# The scheduler has no GpuAllocator yet — it never sets CUDA_VISIBLE_DEVICES per
-# child, so every GPU method it dispatches would land on device 0. Declaring
-# gpu: 1 is what keeps that from happening. Requesting --gres=gpu:4 and raising
-# this to 4 would silently pile four dreamers onto one card. Raise it only
-# together with the allocator.
+# The scheduler's GpuAllocator (scheduler/gpus.py) hands each child its own
+# CUDA_VISIBLE_DEVICES, so N dreamers in one job now land on N distinct cards.
+# Before it existed they all piled onto device 0, which is why this file used to
+# pin gpu: 1 regardless of the allocation.
+#
+# To run N GPU jobs concurrently, all three have to move together:
+#   --gres=gpu:N   --cpus-per-task=31*N   and   resources below: gpu: N,
+#   cpu_slot: 31*N
+# The scheduler takes the SMALLER of resources.gpu and the GPUs actually
+# granted, so over-declaring here does not widen the allocation -- it just
+# warns. Note cpu_slot binds too: at cpu_slot 31 only one 16-slot GPU run fits
+# no matter what gpu: says.
+#
+# A whole g[01-10] node is 4 A100s and 124 threads = gpu: 4, cpu_slot: 124.
+# Check the QOS ceiling first (§0.55: 8 GPUs on the *fast partitions, 6 on
+# *long) and ask before taking a whole node.
 #
 # Partition note: the *fast partitions cap at 4h, which suits smoke tests only.
 # Real experiments want `amdgpu` (1 day), `amdgpulong` (3 days) or
