@@ -345,9 +345,45 @@ independently, so `gpu: 4` with `cpu_slot: 31` still only fits one 16-slot run.
 
 Every dispatch gets a fresh non-overlapping port window starting at 9100,
 stepping by 10 (matching the convention documented in
-`ratsim_experiments/CLAUDE.md`). Released windows are reused. The scheduler
-always passes `base_port=` so `n_envs=1` jobs spawn fresh too — they don't
-attach to the persistent :9000 instance.
+`ratsim_experiments/CLAUDE.md`). The scheduler always passes `base_port=` so
+`n_envs=1` jobs spawn fresh too — they don't attach to the persistent :9000
+instance.
+
+### Released windows cool before reuse
+
+A finished window is **not** returned straight to the pool. The scheduler reaps
+a job when its *train process* exits, but that process spawned `n_envs` Unity
+children who outlive it by seconds — so the window's ports are still held at the
+moment the scheduler considers it free. Handing it to the next dispatch
+immediately produced, in job 11325473:
+
+```
+RuntimeError: port 9640 still in use after waiting
+```
+
+which killed 4 of 4 dreamer re-dispatches (0 of 4 PPO ones — PPO's Unity
+children die inside the launcher's 20 s grace, dreamer's don't).
+
+So `release()` puts the window in a `cooling` set, and `alloc()` only returns a
+cooling window once **every port in it actually binds**. Otherwise it skips to
+the next window and logs:
+
+```
+[scheduler] port windows still cooling, skipped: [9640] — using 9660
+```
+
+Nothing waits and no timeout is guessed — there is always another window, so the
+next run starts immediately and the cooled one rejoins the pool the moment it is
+genuinely clear. The launcher's own 20 s wait stays as a backstop for the
+residual race (the allocator tests the port, the child binds it a moment later).
+
+The whole window is tested, not just the first `n_envs` ports, since the
+allocator can't know how many envs the *next* run will want. A window with a
+stranger squatting on any of its ports keeps getting skipped, which is correct.
+
+`alloc()` scans at most 100 windows (9100–10099) and then raises rather than
+looping forever — hitting that means leaked Unity processes, and
+`scripts/stop_ratsim_headless.sh --all` is the cleanup.
 
 This means **`RATSIM_UNITY_BIN` must be set** for any scheduler-driven run
 (otherwise auto-spawn fails). Manual `start_ratsim_headless.sh` is only for

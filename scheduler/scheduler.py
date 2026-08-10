@@ -965,7 +965,8 @@ def cmd_run(args):
                       f"{profile.needs.get('gpu')} GPU(s) but the pool has "
                       f"{len(gpu_alloc.free)} free — resource accounting and "
                       f"GPU pool disagree. Skipping this dispatch.")
-                port_alloc.release(port_base)
+                # cooled=False: nothing was ever launched into this window.
+                port_alloc.release(port_base, cooled=False)
                 continue
             job = spawn_job(run, stage_idx, profile, port_base, exp,
                             step_multiplier, is_persistent=is_persistent,
