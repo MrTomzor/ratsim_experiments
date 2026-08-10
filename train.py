@@ -53,6 +53,7 @@ from ratsim_wildfire_gym_env.adaptive_difficulty import (
     last_logged_difficulty,
 )
 from feature_extractors import LidarCnnExtractor
+import wandb_integration
 
 from experiment_defs import (
     ExperimentDef,
@@ -439,6 +440,11 @@ def main():
     metaseed = int(overrides.pop("metaseed", default_metaseed))
     method_config_file = overrides.pop("method_config", None)
 
+    # W&B: popped before run_meta is assembled so these don't land in
+    # run_meta["overrides"] as if they were experiment parameters.
+    wandb_project = overrides.pop("wandb_project", None)
+    use_wandb = wandb_integration.wandb_requested(overrides)
+
     # Method config: priority (lowest → highest):
     #   variation.method_args (from def file)
     #   method_config file (if given)
@@ -487,6 +493,14 @@ def main():
     }
     with open(results_dir / "run_config.json", "w") as f:
         json.dump(run_meta, f, indent=2)
+
+    # Resumes rather than re-creates when this is stage K>0 of an existing run
+    # (the id is persisted in the results dir). None when disabled or unusable,
+    # which every downstream call tolerates.
+    wandb_run = (wandb_integration.init_run(results_dir, run_meta,
+                                            project=wandb_project)
+                 if use_wandb else None)
+    wandb_callback = wandb_integration.make_sb3_callback(wandb_run)
 
     tb_log_dir = str(results_dir / "tensorboard")
     checkpoint_dir = results_dir / "checkpoints"
@@ -602,9 +616,13 @@ def main():
                 reset_critic(model)
                 reset_optimizer(model)
 
+        callbacks = [TrainingMetricsCallback(), PhaseTimingCallback()]
+        if wandb_callback is not None:
+            callbacks.append(wandb_callback)
+
         model.learn(
             total_timesteps=stage_steps,
-            callback=[TrainingMetricsCallback(), PhaseTimingCallback()],
+            callback=callbacks,
             reset_num_timesteps=is_stage_transition and reset_on_stage,
         )
         total_steps_trained += stage_steps
@@ -631,6 +649,10 @@ def main():
         print(f"\nPartial run: stages done = {completed} / {n_stages}")
     print(f"Total steps this invocation: {total_steps_trained}")
     print(f"Results dir: {results_dir}")
+
+    # Closes this stage's process cleanly; the next stage reopens the same run
+    # by id via resume="allow".
+    wandb_integration.finish_run(wandb_run)
 
 
 if __name__ == "__main__":

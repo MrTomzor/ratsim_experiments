@@ -41,13 +41,14 @@ import elements
 import embodied
 import ruamel.yaml as ryaml
 import dreamerv3
-from dreamerv3.main import make_logger, make_replay, make_stream, wrap_env
+from dreamerv3.main import make_replay, make_stream, wrap_env
 
 from ratsim.config_blender import blend_presets
 from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
+import wandb_integration
 
 from experiment_defs import (
     ExperimentDef,
@@ -220,6 +221,44 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
     return config
 
 
+def make_logger(config, wandb_run=None):
+    """Local copy of `dreamerv3.main.make_logger`, plus an optional W&B output.
+
+    Deliberately not a patch to `~/git/dreamerv3`: that is a pristine upstream
+    clone, and upstream's version constructs its `WandBOutput` with `name=`
+    only -- no project, group, job_type or config, which is precisely the run
+    identity we need for the 7-wide, one-process-per-stage layout. Copying
+    these few lines is cheaper than carrying a fork.
+
+    Only the outputs this repo actually configures are supported (see
+    `build_config`: jsonl + tensorboard). Upstream's `expa` / `scope` branches
+    are dropped rather than carried as dead code; an unknown output still
+    raises instead of being silently ignored.
+    """
+    step = elements.Counter()
+    logdir = config.logdir
+    multiplier = config.env.get(config.task.split('_')[0], {}).get('repeat', 1)
+    outputs = [elements.logger.TerminalOutput(config.logger.filter, 'Agent')]
+    for output in config.logger.outputs:
+        if output == 'jsonl':
+            outputs.append(elements.logger.JSONLOutput(logdir, 'metrics.jsonl'))
+            outputs.append(elements.logger.JSONLOutput(
+                logdir, 'scores.jsonl', 'episode/score'))
+        elif output == 'tensorboard':
+            outputs.append(elements.logger.TensorBoardOutput(
+                logdir, config.logger.fps))
+        elif output == 'wandb':
+            # Driven by the `wandb=1` flag, not by the dreamer config, so that
+            # run identity has exactly one source. Listing it here is harmless.
+            pass
+        else:
+            raise NotImplementedError(output)
+    wandb_output = wandb_integration.make_elements_output(wandb_run)
+    if wandb_output is not None:
+        outputs.append(wandb_output)
+    return elements.Logger(step, outputs, multiplier)
+
+
 def snapshot_latest_ckpt(logdir: Path, dest: Path) -> None:
     """Copy embodied's rolling `ckpt/latest` into a stable per-stage dest."""
     latest_pointer = logdir / "ckpt" / "latest"
@@ -286,6 +325,11 @@ def main():
     start_stage = int(overrides.pop("start_stage", 0))
     end_stage_arg = overrides.pop("end_stage", None)
 
+    # Popped before the `method.` sweep below so they aren't mistaken for
+    # dreamer config overrides.
+    wandb_project = overrides.pop("wandb_project", None)
+    use_wandb = wandb_integration.wandb_requested(overrides)
+
     # Method overrides priority (lowest → highest):
     #   variation.method_args (from def file)
     #   method_config file (if given)
@@ -322,6 +366,26 @@ def main():
         "variation": variation_name,
         "seed": int(metaseed),
     }
+
+    # One W&B run for the whole invocation, resumed by id when this is stage
+    # K>0 of an existing run. Mirrors run_config.json, minus the per-stage
+    # fields that would otherwise churn the W&B config between stages.
+    # `method` stays "dreamerv3" to match what this script already writes to
+    # run_config.json and train_episodes.jsonl -- one convention, not three.
+    wandb_meta = {
+        "exp_id": exp.exp_id,
+        "exp_def": str(exp.source),
+        "variation": variation_name,
+        "method": "dreamerv3",
+        "size": size,
+        "step_multiplier": step_multiplier,
+        "metaseed": metaseed,
+        "run_name": run_name,
+        "method_overrides": method_overrides,
+    }
+    wandb_run = (wandb_integration.init_run(results_dir, wandb_meta,
+                                            project=wandb_project)
+                 if use_wandb else None)
 
     alloc_kwargs = {"n_envs": n_envs}
     if base_port is not None:
@@ -408,7 +472,7 @@ def main():
                  run_metadata=stage_run_metadata,
                  unity_ports=unity_ports),
             bind(make_stream, config),
-            bind(make_logger, config),
+            bind(make_logger, config, wandb_run),
             args_cfg,
         )
 
@@ -427,6 +491,9 @@ def main():
         completed = [i for i in range(n_stages)
                      if (ckpt_dir / f"stage_{i}.done").exists()]
         print(f"\n[dreamerv3] Partial run: stages done = {completed} / {n_stages}")
+
+    # The next stage's process reopens this same run by id via resume="allow".
+    wandb_integration.finish_run(wandb_run)
 
 
 if __name__ == "__main__":

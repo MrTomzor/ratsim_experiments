@@ -104,6 +104,101 @@ python analyze_run_data.py symlinks/comparison_A/
 
 Needs the sb3 venv (pandas + matplotlib): `~/ratvenv/venv/bin/python analyze_run_data.py ...`.
 
+### Experiment tracking (Weights & Biases)
+
+`wandb_integration.py` adds W&B as an **extra sink alongside TensorBoard**, not a
+replacement. Both frameworks fan one metric stream out to a list of outputs, so
+nothing about *what* is recorded changes — every existing `logger.record()` call
+site (`custom/*`, `timing/*`, `rollout/*`, `train/*`) is mirrored untouched. TB
+keeps writing (12 KB–5 MB per run, noise next to a 225 MB replay dir) and stays
+the local fallback. `train_episodes.jsonl` is in neither path, so the
+method-invariant schema and every analysis script are unaffected.
+
+Off by default. Opt in per-run or globally:
+
+```bash
+python train.py def=smoke_test method=ppo wandb=1
+python train.py def=smoke_test method=ppo wandb=1 wandb_project=ratsim-dev
+export RATSIM_WANDB=1     # shell rc locally, rci_env.sh on the cluster
+```
+
+Credentials come from `WANDB_API_KEY` or `~/.netrc`. **Never put the key in
+`rci_env.sh`** — that file is tracked in git.
+
+**Run identity is the part that matters.** The scheduler dispatches one *process
+per stage* (`start_stage=K end_stage=K+1`), so a 10-stage run is 10 invocations.
+A plain `wandb.init()` would give 10 disconnected runs per seed on top of the
+7-wide seed fan-out. Instead the W&B run id is generated once and persisted to
+`<run_dir>/wandb_id.txt`, and later stages reopen it with `resume="allow"`. The
+id is stored on disk rather than hashed from the run path deliberately: a path
+hash would silently resume a *stale* W&B run if the results dir were deleted and
+the experiment re-run, appending new data onto old curves.
+
+This works because both frameworks already carry a monotone global step across
+stages — SB3 runs `reset_num_timesteps=False` and restores `num_timesteps` from
+the checkpoint zip; Dreamer re-targets `run.steps` and restores from
+`ckpt/latest`. Verified locally: stage 0 ended at `total_timesteps=6144`, and
+stage 1 in a *separate process* continued to 12288 under the same run id.
+
+Grouping, so 7-wide sweeps collapse into comparable charts rather than 7
+unrelated lines:
+
+| W&B field | Value |
+|---|---|
+| `project` | `ratsim` (override with `wandb_project=`) |
+| `group` | `exp_id` |
+| `job_type` | method (ppo / recurrent_ppo / dreamer) |
+| `name` | run leaf (`<variation>__<method>__seed<n>`) |
+| `tags` | method, variation, machine (`rci` under SLURM, else hostname) |
+| `config` | the existing `run_meta` / `run_config.json` payload |
+
+W&B state is written to `<run_dir>/wandb/` (via `dir=`), **not** `$TMPDIR` —
+`rci_env.sh` makes that per-job and wipes it on job exit.
+
+RCI compute nodes have full outbound HTTPS (measured on a07: no proxy, DNS
+resolves, `curl_exit=0` against `api.wandb.ai`), so runs stream live and the
+`WANDB_MODE=offline` + `wandb sync` fallback is not needed there.
+
+Both frameworks are wired, each through its own logger:
+
+| Path | Hook | Where |
+|---|---|---|
+| SB3 (ppo, recurrent_ppo) | `KVWriter` appended to `model.logger.output_formats` | `make_sb3_callback` |
+| DreamerV3 | an `elements.logger` output appended in a local `make_logger` | `make_elements_output` |
+
+The SB3 writer attaches in `_on_training_start`, not at construction: SB3 builds
+the real logger inside `learn()` (`_setup_learn` → `configure_logger`), so
+anything attached earlier is discarded.
+
+`train_dreamerv3.py` carries its **own copy** of `make_logger` instead of
+importing `dreamerv3.main.make_logger`. `~/git/dreamerv3` is a pristine upstream
+clone and upstream's version builds its `WandBOutput` with `name=` only — no
+project, group, job_type or config, i.e. exactly the run identity the 7-wide
+one-process-per-stage layout needs. Copying ~15 lines beats carrying a fork.
+
+⚠️ **Do not "simplify" `make_elements_output` into a subclass of
+`elements.logger.WandBOutput`.** Its image branch is broken upstream: it reads
+`value.shape[3]` on a 2/3-D array (copy-pasted from the 4-D video branch below
+it), so *any* image summary raises `IndexError` — verified, both the 2-D and 3-D
+paths raise. Inheriting `__call__` would turn the first Dreamer report containing
+an image into a crashed training run. Our version fixes the index and leaves
+images in the H×W×C layout `wandb.Image` documents.
+
+Verified end-to-end on both paths, each run as **two separate processes** to
+mirror the scheduler:
+
+| Path | Stage 0 | Stage 1 (separate process) |
+|---|---|---|
+| PPO | `total_timesteps=6144` | continued to `12288`, same run id |
+| DreamerV3 | — | embodied step counter 870 → 1880, `resumed=True` online |
+
+Unrelated gotcha that will bite you when re-running a stage by hand: the client
+socket leaves the Unity port in `TIME_WAIT` (~60 s on Linux), while
+`_wait_port_bindable` defaults to 20 s, so a back-to-back invocation on the same
+`base_port` fails with "port N still in use after waiting". Pre-existing, and
+already suspected in that function's own docstring. Wait for
+`ratsim.unity_launcher._port_bindable(port)` before relaunching.
+
 ### Memory ablation (DreamerV3)
 
 Test-time probe for whether a trained DreamerV3 agent is actually using its
