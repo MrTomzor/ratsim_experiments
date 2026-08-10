@@ -1,0 +1,94 @@
+# RCI cluster (CTU) — AMD **GPU** node (g[01-12], 4x A100-SXM4-40GB).
+#
+# Use this for dreamer and recurrent_ppo. For a CPU-only PPO sweep use
+# `--machine rci`, which gets a much bigger CPU allocation (see that file).
+#
+#   sbatch -p amdgpu --gres=gpu:1 --cpus-per-task=31 --mem=100G \
+#          rci_port_probes/scheduler_job.sbatch <exp>
+#   # or by hand, inside a job:
+#   export RATSIM_SCHEDULER_MACHINE=rci_gpu
+#   python scheduler_run.py <exp>
+#
+# ---------------------------------------------------------------------------
+# Why 31 threads, not 112.
+#
+# A GPU node has to be shared proportionately: g[01-10] allow 124 threads and
+# have 4 A100s, so one GPU's fair share is 124/4 = 31 threads. Taking 112 with a
+# single --gres=gpu:1 would strand three A100s that nobody else can schedule.
+# That is the same reasoning as the 18-threads-per-V100 figure on the Intel GPU
+# nodes (72 threads / 4 GPUs); see RCI_CLUSTER_PORT.md §0.55.
+#
+# 31 threads at the pinned n_envs=4 (~4 threads per env, see rci.yaml) is one
+# GPU run plus one PPO run alongside it, which is what the profiles below
+# encode. If you want N dreamers, ask for N GPUs and 31*N threads — but read
+# the gpu: 1 note first.
+#
+# ⚠️ UNVERIFIED SIZING. The A100 dreamer timing is measured (§0.56: 152 s on a
+# 10k-step run, 1.25x a V100, identical at n_envs=1 and n_envs=4), but running
+# two methods concurrently in one GPU-node job has not been tested the way the
+# 7-wide PPO job was. Treat the concurrency numbers here as a starting point.
+#
+# ---------------------------------------------------------------------------
+# gpu: 1 is a LIMIT, not a description of the node.
+#
+# The scheduler has no GpuAllocator yet — it never sets CUDA_VISIBLE_DEVICES per
+# child, so every GPU method it dispatches would land on device 0. Declaring
+# gpu: 1 is what keeps that from happening. Requesting --gres=gpu:4 and raising
+# this to 4 would silently pile four dreamers onto one card. Raise it only
+# together with the allocator.
+#
+# Partition note: the *fast partitions cap at 4h, which suits smoke tests only.
+# Real experiments want `amdgpu` (1 day), `amdgpulong` (3 days) or
+# `amdgpuextralong` (21 days) — and since checkpoints currently land only at
+# stage boundaries, a run that outlives its wall-clock loses the current
+# stage's progress.
+#
+# 🚫 Do NOT retarget this at the h200* partitions. The admin rule is to use
+# those only at high utilisation, and one dreamer world model will not
+# saturate one H200.
+# ---------------------------------------------------------------------------
+
+resources:
+  gpu: 1
+  cpu_slot: 31
+
+method_profiles:
+  ppo:
+    needs:
+      cpu_slot: 16
+    args:
+      # No GPU need: CPU beats GPU for a small MLP (per-step host<->device
+      # transfer costs more than the forward pass saves), which also leaves the
+      # A100 free for the dreamer run alongside.
+      method.device: cpu
+
+  recurrent_ppo:
+    needs:
+      gpu: 1
+      cpu_slot: 16
+    args:
+      method.device: cuda
+
+  dreamer:
+    needs:
+      gpu: 1
+      cpu_slot: 16
+    # Known unfixed leak (~6-8 KB/env-step in the train process); the scheduler
+    # SIGTERMs and re-dispatches at this threshold. Keep --mem comfortably above
+    # it or SLURM's own OOM killer gets there first and the run just dies.
+    max_ram_gb: 30
+    args:
+      method.jax.platform: cuda
+      # NO compute_dtype override -- keep dreamerv3's bfloat16 default.
+      #
+      # Measured on a V100 (sm_70), 10k-step run each, one variable changed:
+      #   bfloat16 (default) -> exit 0, fps/train 2039.8, fps/policy 67.3
+      #   float16            -> exit 1, TypeError: "Argument types differ from
+      #                         the types for which this computation was compiled"
+      #
+      # This is the opposite of what "Volta has no native bf16" suggests. Volta
+      # lacking bf16 *tensor cores* does not stop XLA emulating the dtype
+      # correctly, and dreamerv3's graph evidently pins bfloat16 somewhere that
+      # a float16 compute_dtype then contradicts. Don't "optimise" this back to
+      # float16 without re-running that comparison. (The A100 has native
+      # bfloat16, so it is doubly right there.)

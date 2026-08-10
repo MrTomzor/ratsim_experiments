@@ -93,10 +93,26 @@ class AdaptiveDifficultySpec:
         }
 
 
+# Parallel Unity envs per training process, unless a method overrides it.
+#
+# This lives on the experiment def, not the machine config, because n_envs
+# changes *what the run learns*, not just how fast it goes: fewer envs means
+# less trajectory diversity per update, so a 4-env run and a 1-env run of the
+# "same" experiment are not comparable results. Pinning one value across every
+# machine is what makes a laptop run and a cluster run the same experiment.
+#
+# 4 is the measured sweet spot — see RCI_CLUSTER_PORT.md §0.8/§0.9. It also
+# sets the CPU floor: below roughly 4 threads per env, throughput collapses
+# (a 4-env PPO run on 4 threads managed 17 fps against 688 on 16), so a machine
+# profile granting `cpu_slot: 4 * n_envs` or more is the sizing rule.
+DEFAULT_N_ENVS = 4
+
+
 @dataclass
 class MethodSpec:
     name: str
     n_seeds: int
+    n_envs: int = DEFAULT_N_ENVS
     args: dict = field(default_factory=dict)
     python_env: str | None = None
     train_script: str | None = None
@@ -177,9 +193,14 @@ def _parse_methods(raw_methods, default_n_seeds: int, src: Path) -> list[MethodS
         if name in seen:
             raise ValueError(f"{src}: duplicate method '{name}'")
         seen.add(name)
+        n_envs = int(m.get("n_envs", DEFAULT_N_ENVS))
+        if n_envs < 1:
+            raise ValueError(
+                f"{src}: methods[{i}] '{name}': n_envs must be >= 1, got {n_envs}")
         out.append(MethodSpec(
             name=name,
             n_seeds=int(m.get("n_seeds", default_n_seeds)),
+            n_envs=n_envs,
             args=dict(m.get("args") or {}),
             python_env=m.get("python_env"),
             train_script=m.get("train_script"),
@@ -401,7 +422,9 @@ def snapshot_experiment(exp: ExperimentDef) -> dict:
         out["world_preset"] = list(exp.world_preset)
     out["stages"] = [s.to_dict() for s in exp.stages]
     out["methods"] = [
-        {"name": m.name, "n_seeds": m.n_seeds,
+        # n_envs is always emitted, never omitted-when-default: it changes what
+        # the run learns, so a snapshot without it can't be compared or replayed.
+        {"name": m.name, "n_seeds": m.n_seeds, "n_envs": m.n_envs,
          **({"args": dict(m.args)} if m.args else {}),
          **({"python_env": m.python_env} if m.python_env else {}),
          **({"train_script": m.train_script} if m.train_script else {})}

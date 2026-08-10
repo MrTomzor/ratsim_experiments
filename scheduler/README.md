@@ -232,8 +232,7 @@ per kill.
 ```yaml
 method_profiles:
   dreamer:
-    needs: {gpu: 1, cpu_slot: 1}
-    n_envs: 1
+    needs: {gpu: 1, cpu_slot: 16}
     max_ram_gb: 30      # ← SIGTERM if RSS exceeds 30 GB
 ```
 
@@ -252,30 +251,47 @@ The default machine config doesn't set `max_ram_gb` anywhere; only
 
 ## Vectorization (n_envs)
 
-Each method profile also declares `n_envs:` (default 1) — the number of
-parallel Unity envs each dispatched job spawns. Lives on the *machine*
-profile, not the experiment def, because "how many envs make sense"
-depends on the box (cores, RAM, GPU), not the experiment. The scheduler
-passes `n_envs=<N>` to train.py at dispatch time.
+`n_envs` — the number of parallel Unity envs each dispatched job spawns —
+lives on the **experiment def**, per method, and defaults to **4**:
 
 ```yaml
-method_profiles:
-  ppo:
-    needs: {cpu_slot: 4}      # ← bump in lockstep with n_envs
-    n_envs: 4
-  dreamer:
-    needs: {gpu: 1, cpu_slot: 2}
-    n_envs: 2
+methods:
+  - name: ppo
+    n_seeds: 3
+    n_envs: 4        # optional; 4 is the default
 ```
 
-**`needs` does not auto-track `n_envs`** — you have to bump them together.
-Each Unity env is roughly one `cpu_slot` of CPU work for the sim side, plus
-the policy/learning compute. If you set `n_envs: 4` but leave
-`needs: {cpu_slot: 1}`, the scheduler will run multiple of these in
-parallel and oversubscribe the box.
+It used to live on the machine profile, on the theory that "how many envs
+make sense" is a property of the box. That was wrong: fewer envs means less
+trajectory diversity per update, so a 1-env run and a 4-env run of the same
+def are **different experiments**, not the same experiment at different
+speeds. Keeping one value across every machine is what makes a laptop run
+comparable with a cluster run. A machine config that still sets `n_envs:`
+is now a hard error telling you to move it.
 
-`n_envs` is in `RESERVED_ARGS` — putting it in `args:` of the profile or in
-def-level `common_args:` is ignored with a warning. The machine profile is
+The scheduler passes `n_envs=<N>` to train.py at dispatch time, and always
+records it in the def snapshot.
+
+### Sizing: ~4 cpu_slots per env
+
+`cpu_slot` is counted in **threads**. The scheduler warns at startup when a
+method's `needs.cpu_slot` is below `4 × n_envs`:
+
+```
+[scheduler] WARNING: method 'ppo' runs n_envs=4 on cpu_slot=8. Below ~4
+slots per env (16 here) throughput drops sharply — ...
+```
+
+It's a warning, not an error — an undersized box still produces valid
+results. But this is a cliff, not a slope. The same 20k-step PPO run at
+`n_envs=4`: **17 fps** on 4 threads, **251** on 8, **688** on 16.
+
+The corollary is that packing more runs by shrinking `needs.cpu_slot` makes
+things worse, not better: 4 runs sharing one 16-thread job took 1265 s,
+against 339 s when only 2 ran at a time.
+
+`n_envs` is in `RESERVED_ARGS` — putting it in a profile's `args:` or in
+def-level `common_args:` is ignored with a warning. The `methods:` entry is
 the only place to set it for scheduler-driven runs.
 
 **Hard cap**: `n_envs ≤ 10` per job (each dispatch gets a 10-wide Unity

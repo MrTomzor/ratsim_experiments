@@ -17,11 +17,15 @@
 #     state across rollouts + lots of env steps — not with deeper BPTT.
 #     We take their n_steps=256, batch_size=256.
 #
-# IMPORTANT: n_envs is NOT a def-level field; it's set at CLI dispatch (or
-# by the scheduler's machine profile). Run with:
+# IMPORTANT: this recipe wants far more envs than the def-wide default of 4.
+# Set `n_envs:` on the method below for scheduler runs, or pass it on the CLI
+# for an ad-hoc one:
 #
 #   python train.py def=memory_houses_paperhparams n_envs=256 \
 #       base_port=9100 metaseed=0
+#
+# (The scheduler caps n_envs at 10 — its per-job Unity port window — so a run
+# this wide is CLI-only until PortAllocator.window_size grows.)
 #
 # 256 fresh Unity instances need a lot of CPU + RAM. Either:
 #   (a) drop to n_envs=32 or 64 first to confirm the recipe before scaling, or

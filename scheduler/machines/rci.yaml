@@ -1,89 +1,67 @@
-# RCI cluster (CTU) machine config — one SLURM job hosting the scheduler.
+# RCI cluster (CTU) — AMD CPU node. **PPO only; no GPU here.**
+#
+# For dreamer or recurrent_ppo use `--machine rci_gpu` instead: the `amd*`
+# partitions map to a[01-16], which have no accelerators at all, so a def
+# containing a GPU method will (correctly) fail validation against this file.
 #
 #   sbatch rci_port_probes/scheduler_job.sbatch <exp>
 #   # or by hand, inside a job:
 #   export RATSIM_SCHEDULER_MACHINE=rci
 #   python scheduler_run.py <exp>
 #
-# Assumes the allocation the sbatch wrapper requests:
-#   --cpus-per-task=16 --gres=gpu:1 --mem=64G
-# `resources` below must match it. SLURM hands you a *fraction of a node* and
-# cgroup-limits you to it, so asking for more cpu_slot than --cpus-per-task just
+# Assumes:
+#   --partition=amd --cpus-per-task=112 --mem=200G --nodes=1
+# `resources` below must match it. The scheduler spawns children with plain
+# subprocess.Popen (no srun), so everything it dispatches lands on the ONE node
+# the job holds — asking for more cpu_slot than --cpus-per-task just
 # oversubscribes your own cgroup and makes every run slower.
 #
 # ---------------------------------------------------------------------------
-# Sizing rationale — measured on gpufast (Xeon Gold 6150 @ 2.70 GHz, V100), see
-# RCI_CLUSTER_PORT.md §0.6. Two numbers drive everything here:
+# Sizing rationale — measured, see RCI_CLUSTER_PORT.md §0.56 and §0.9.
 #
-#   raw sim FPS by CPUs allocated:  1 -> 386,  4 -> 1203,  8 -> 1672, 16 -> 1877
-#   PPO training fps (n_envs=1):    4 -> 232,                        16 -> 280
+# `cpu_slot` is counted in THREADS, and a SLURM "CPU" is a thread, not a core.
+# The AMD nodes (a01-a16, EPYC 7543, 64c/128t) allow 126 of those 128 to be
+# allocated; 112 leaves headroom and divides cleanly into 7 slots of 16.
 #
-# So a single run stops benefiting from cores at about 4: going 4 -> 16 buys
-# +56% on raw stepping but only +20% on training, because the bottleneck moves
-# to the single-threaded Python side (env wrapper, obs assembly, policy
-# forward). Packing four 4-slot runs into 16 cores therefore beats one fat run
-# by roughly 3x aggregate throughput. Hence cpu_slot: 16 with needs.cpu_slot: 4.
+# The binding number is ~4 threads per Unity env. It is a cliff, not a slope —
+# same 20k-step PPO run at n_envs=4, only the allocation differing:
 #
-# This is also why n_envs is 1 everywhere below, unlike default.yaml (4) and
-# gpu_example.yaml (8). Two reasons:
-#   * per-step latency here is CPU-clock-bound, so concurrent *runs* buy the
-#     same throughput as vectorized envs without SubprocVecEnv overhead;
-#   * n_envs>1 has never been run in a SLURM job. Raising it is the first thing
-#     to try once someone verifies it, not something to ship untested.
+#     4 threads  ->  17 fps       (2037 s wall)
+#     8 threads  -> 251 fps
+#    16 threads  -> 688 fps  (Intel) / 723 fps (AMD)
 #
-# A single run is ~3x SLOWER here than on the laptop (fps 232-280 vs 816). The
-# cluster wins on parallelism and wall-clock limits, not per-run speed — so
-# prefer many concurrent runs and a long partition over a big allocation.
+# So at the pinned n_envs=4 (set in the experiment def) a run wants 16 threads,
+# and 112/16 = 7 concurrent runs. That is verified, not extrapolated: job
+# 11318081 ran 7 PPO seeds x 100k steps on node a10, 7/7 clean, each holding
+# 593-625 fps against a 723 solo baseline (84%), aggregate 4253 fps = 7.3x a
+# single laptop run (581). opt_seconds did not degrade under the packing.
 #
-# Partition note: gpufast caps at 4h, which suits smoke tests only. Real
-# experiments want `gpu` (1 day), `gpulong` (3 days) or `gpuextralong` (21
-# days) — and since checkpoints currently land only at stage boundaries, a run
-# that outlives its wall-clock loses the current stage's progress.
+# Do NOT try to fit more runs by shrinking needs.cpu_slot. Concurrency on
+# *insufficient* cores is much worse than queueing: 4 runs in one 16-thread job
+# took 1265 s 4-wide against 339 s 2-wide.
+#
+# Per-run speed here is roughly the laptop's (723 vs 581). The cluster wins on
+# packing 7 of them into one job, not on being a faster computer.
+#
+# AMD vs Intel: within ~5% at 16 threads. AMD is the right default only because
+# its nodes are bigger (126 allocatable threads vs 46 on n01-20 / 70 on n21-32),
+# so more runs fit per job. The venvs built on Intel run unmodified on AMD —
+# same module tree at /mnt/appl/software, same glibc.
+#
+# Partition note: the *fast partitions cap at 4h, which suits smoke tests only.
+# Real experiments want `amd` (1 day), `amdlong` (3 days) or `amdextralong`
+# (21 days) — and since checkpoints currently land only at stage boundaries, a
+# run that outlives its wall-clock loses the current stage's progress.
 # ---------------------------------------------------------------------------
 
 resources:
-  gpu: 1
-  cpu_slot: 16
+  cpu_slot: 112
 
 method_profiles:
   ppo:
     needs:
-      cpu_slot: 4
-    n_envs: 1
+      cpu_slot: 16
     args:
-      # CPU beats GPU for a small MLP at n_envs=1: per-step host<->device
-      # transfer costs more than the forward pass saves. Leaves the V100 free
-      # for a dreamer run alongside.
+      # CPU beats GPU for a small MLP anyway: per-step host<->device transfer
+      # costs more than the forward pass saves.
       method.device: cpu
-
-  recurrent_ppo:
-    needs:
-      gpu: 1
-      cpu_slot: 4
-    n_envs: 1
-    args:
-      method.device: cuda
-
-  dreamer:
-    needs:
-      gpu: 1
-      cpu_slot: 4
-    n_envs: 1
-    # Known unfixed leak (~6-8 KB/env-step in the train process); the scheduler
-    # SIGTERMs and re-dispatches at this threshold. Keep --mem comfortably above
-    # it or SLURM's own OOM killer gets there first and the run just dies.
-    max_ram_gb: 30
-    args:
-      method.jax.platform: cuda
-      # NO compute_dtype override -- keep dreamerv3's bfloat16 default.
-      #
-      # Measured on a V100 (sm_70), 10k-step run each, one variable changed:
-      #   bfloat16 (default) -> exit 0, fps/train 2039.8, fps/policy 67.3
-      #   float16            -> exit 1, TypeError: "Argument types differ from
-      #                         the types for which this computation was compiled"
-      #
-      # This is the opposite of what "Volta has no native bf16" suggests. Volta
-      # lacking bf16 *tensor cores* does not stop XLA emulating the dtype
-      # correctly, and dreamerv3's graph evidently pins bfloat16 somewhere that
-      # a float16 compute_dtype then contradicts. Don't "optimise" this back to
-      # float16 without re-running that comparison.

@@ -556,7 +556,7 @@ def build_command(run: Run, stage_idx: int, profile: cfg.MethodProfile,
         f"end_stage={stage_idx + 1}",
         f"step_multiplier={step_multiplier}",
         f"metaseed={run.seed}",
-        f"n_envs={profile.n_envs}",
+        f"n_envs={run.method.n_envs}",
     ]
     # When the job is on the persistent slot, omit base_port — train.py's
     # allocate_unity_instances(n_envs=1) without a base_port hits the
@@ -596,7 +596,7 @@ def spawn_job(run: Run, stage_idx: int, profile: cfg.MethodProfile,
 
     port_label = f"{port_base} (persistent)" if is_persistent else str(port_base)
     print(f"[scheduler] dispatch {run.run_id} stage {stage_idx} "
-          f"port={port_label} n_envs={profile.n_envs}")
+          f"port={port_label} n_envs={run.method.n_envs}")
     print(f"[scheduler]   log: {log_path}")
     print(f"[scheduler]   cmd: {' '.join(cmd)}")
 
@@ -671,9 +671,10 @@ def cmd_run(args):
     # --use-port-9000 is a demo mode: attach one training instance to the
     # Unity GUI on port 9000 and watch it learn. That path is inherently
     # single-env (the persistent slot hands out one port, not a window), so
-    # force n_envs=1 on every profile — otherwise a machine config with
-    # n_envs>1 (e.g. the default's 4) would never qualify for the slot and
-    # silently land on a headless 9100+ window instead.
+    # force n_envs=1 on every method — otherwise a def with the usual n_envs=4
+    # would never qualify for the slot and silently land on a headless 9100+
+    # window instead. This makes the demo run NOT comparable with the real
+    # thing, which is fine for watching but not for results.
     use_port_9000 = bool(getattr(args, "use_port_9000", False))
     # Refuse the persistent slot on a shared cluster node. Its whole premise is
     # "attach to the Unity *I* launched on 9000 so I can watch it" — on a node
@@ -684,11 +685,15 @@ def cmd_run(args):
               f"(job {_slurm_job_id()}), where :9000 may belong to another user.")
         use_port_9000 = False
     if use_port_9000:
-        for name, profile in machine.method_profiles.items():
-            if profile.n_envs != 1:
+        forced = []
+        for method in exp.methods:
+            if method.n_envs != 1:
                 print(f"[scheduler] --use-port-9000: forcing n_envs=1 for "
-                      f"'{name}' (was {profile.n_envs})")
-                machine.method_profiles[name] = replace(profile, n_envs=1)
+                      f"'{method.name}' (was {method.n_envs})")
+                forced.append(replace(method, n_envs=1))
+            else:
+                forced.append(method)
+        exp = replace(exp, methods=forced)
 
     cfg.validate_against_machine(exp, machine)
 
@@ -902,7 +907,7 @@ def cmd_run(args):
             # job's session (Unity's connector wasn't built for that).
             port_base = None
             is_persistent = False
-            if (use_port_9000 and profile.n_envs == 1
+            if (use_port_9000 and run.method.n_envs == 1
                     and not port_alloc.persistent_in_use):
                 cand = port_alloc.try_alloc_persistent()
                 if cand is not None:

@@ -34,7 +34,8 @@ def main():
              "(equivalent to rm -rf + run). Default behavior is to resume.")
     p.add_argument(
         "--use-port-9000", action="store_true", dest="use_port_9000",
-        help="Demo mode: forces n_envs=1 on all method profiles and hands "
+        help="Demo mode: forces n_envs=1 on every method (so the run is NOT "
+             "comparable with a normal one) and hands "
              "port 9000 to one dispatch at a time, but only when Unity is "
              "alive on 9000 (TCP probe at dispatch time). Useful for manually "
              "launching a Unity GUI on 9000 and watching one training "

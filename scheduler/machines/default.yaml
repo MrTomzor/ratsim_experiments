@@ -1,11 +1,15 @@
-# Default machine config — CPU only, 1 env per process.
+# Default machine config — CPU only, one run at a time.
 #
 # Used when no --machine flag is given and $RATSIM_SCHEDULER_MACHINE is unset.
-# Adjust cpu_slot to control how many subprocesses run in parallel here.
 #
-# n_envs defaults to 1 for every method (omitted = single-env training).
-# Bump it per-method on a beefier box (see gpu_example.yaml) and remember
-# to bump `needs.cpu_slot` to match — the scheduler doesn't auto-derive.
+# `cpu_slot` is counted in THREADS (what `nproc` reports), and that unit matters
+# now: the scheduler warns when a method's needs.cpu_slot is under ~4 threads
+# per env, which is the point where throughput stops degrading gracefully and
+# falls off a cliff. Set `resources.cpu_slot` to this box's thread count.
+#
+# With the default n_envs=4 (set in the experiment def, not here), a 16-thread
+# box fits exactly one run. To run several at once you need more threads, not a
+# smaller `needs` — see rci.yaml for the packed-node shape.
 #
 # To use a different config (e.g. on a GPU box):
 #   python scheduler_run.py <exp> --machine gpu_example
@@ -14,26 +18,23 @@
 #   python scheduler_run.py <exp>
 
 resources:
-  cpu_slot: 1
+  cpu_slot: 16
 
 method_profiles:
   ppo:
     needs:
-      cpu_slot: 1
-    n_envs: 4
+      cpu_slot: 16
     args:
       method.device: cpu
 
   recurrent_ppo:
     needs:
-      cpu_slot: 1
-    n_envs: 4
+      cpu_slot: 16
     args:
       method.device: cpu
 
   dreamer:
     needs:
-      cpu_slot: 1
-    n_envs: 4
+      cpu_slot: 16
     args:
       method.jax.platform: cpu

@@ -3,6 +3,9 @@
 !.gitignore
 !default.yaml
 !gpu_example.yaml
-# rci.yaml is a shared CTU cluster, not a personal box
+# rci*.yaml is a shared CTU cluster, not a personal box. Two shapes, because
+# one file cannot describe both node types: rci.yaml is the AMD CPU node
+# (a[01-16], no GPU), rci_gpu.yaml the AMD GPU node (g[01-12], A100).
 !rci.yaml
+!rci_gpu.yaml
 !README.md

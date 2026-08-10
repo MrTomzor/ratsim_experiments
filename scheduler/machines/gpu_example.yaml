@@ -1,52 +1,43 @@
-# GPU-box machine config — one GPU, ~20 vCPUs (Broadwell-class virtualized).
+# GPU-box machine config — one GPU, ~20 threads (Broadwell-class virtualized).
 #
 # Activate via:
 #   python scheduler_run.py <exp> --machine gpu_example
 # or via shell:
 #   export RATSIM_SCHEDULER_MACHINE=gpu_example
 #
-# recurrent_ppo and dreamer both contend for the single gpu slot, so at most
-# one of them runs at a time. Plain PPO can still run alongside the GPU job.
+# `cpu_slot` is counted in THREADS. At the default n_envs=4 the sizing rule is
+# ~4 threads per env, so one run wants 16 and a 20-thread box fits exactly one
+# at a time — the earlier version of this file claimed three parallel PPOs, but
+# that was written when n_envs was 1. A box this size does not have the cores
+# to pack runs; that needs a machine like rci.yaml.
 #
-# n_envs is set per method here (not in the experiment def) since "how many
-# parallel envs make sense" depends on the box, not the experiment. PPO and
-# dreamer both vectorize to 4 envs to amortize the slow per-step Unity round-
-# trip on this box's mediocre single-thread perf. recurrent_ppo stays at 1
-# because SB3's RecurrentPPO has per-env LSTM state and vectorizes less
-# cleanly (and the policy is on GPU anyway, so single-thread CPU matters less).
-#
-# cpu_slot accounting: each Unity env is roughly one cpu_slot of CPU work.
-# With cpu_slot=12 we can fit dreamer (4) + one PPO (4) + headroom, or up to
-# three parallel PPOs.
+# recurrent_ppo and dreamer both contend for the single gpu slot, so at most one
+# of them runs at a time anyway.
 
 resources:
   gpu: 1
-  cpu_slot: 12
+  cpu_slot: 20
 
 method_profiles:
   ppo:
     needs:
-      cpu_slot: 4
-    n_envs: 8
+      cpu_slot: 16
     args:
       method.device: cpu
 
   recurrent_ppo:
     needs:
       gpu: 1
-      cpu_slot: 1
-    n_envs: 8
+      cpu_slot: 16
     args:
       method.device: cuda
 
   dreamer:
     needs:
       gpu: 1
-      cpu_slot: 1
-    n_envs: 1
+      cpu_slot: 16
     # Dreamer has a known unfixed memory leak (~6-8 KB/env-step in the train
-    # process). At n_envs=1 the leak fills at base rate, so SIGTERM at 30 GB
-    # gives the longest possible per-cycle uptime before kill.
+    # process); the scheduler SIGTERMs and re-dispatches at this threshold.
     # See /home/tom/dreamer_crash_summary.md.
     max_ram_gb: 30
     args:
