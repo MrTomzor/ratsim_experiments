@@ -45,7 +45,7 @@ adaptive_difficulty:
 
 # bfs interleaves stages across the 4 variants so partial results stay
 # comparable at equal step counts (flip to dfs to finish one variant at a time).
-mode: bfs
+mode: dfs
 
 methods:
   - name: dreamer
@@ -54,9 +54,8 @@ methods:
 
 variations:
   # RAW config keys here (no `method.` prefix) — read by train_dreamerv3.py directly.
-  - {name: consec4,  method_args: {consec_train: 4}}                       # 192-step fresh-carry chains, gradient window still 48
-  - {name: bl128,    method_args: {batch_length: 128}}                     # gradient window ≈ one trial leg at low difficulty
-  - {name: bl256,    method_args: {batch_length: 256}}                     # flagship: window covers a full random→home cycle at low d
   - {name: bl256_c2, method_args: {batch_length: 256, consec_train: 2}}    # production candidate: 256 window + 512-step continuity
+  - {name: consec4,  method_args: {consec_train: 4}}                       # 192-step fresh-carry chains, gradient window still 48
+  - {name: bl256,    method_args: {batch_length: 256}}                     # flagship: window covers a full random→home cycle at low d
 
-seeds: 1
+seeds: 3
