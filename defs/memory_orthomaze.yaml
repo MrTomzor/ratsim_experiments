@@ -24,7 +24,7 @@ total_steps: 6_000_000
 mode: dfs
 
 methods:
-  # - name: recurrent_ppo
+  - name: recurrent_ppo
   - name: dreamer
   - name: ppo
 
