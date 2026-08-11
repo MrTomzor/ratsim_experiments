@@ -121,13 +121,13 @@ agent_preset: sphereagent_2d_lidar              # default, may be string or list
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: maze_default                      # default world for stages
 
-# Preferred: author the stage size, derive the total.
+# Give any TWO of steps_per_stage / total_steps / n_stages; the third follows.
+# Best pairing — state the budget and the granularity:
 steps_per_stage: 1_000_000
-n_stages: 10                                    # → 10M total
+total_steps: 10_000_000                         # → 10 stages
 
-# OR legacy short form — works, but see the warning below:
-# total_steps: 10_000_000
-# n_stages: 10                                  # → 10 equal stages of 1M each
+# Also fine:  steps_per_stage + n_stages
+# ⚠️ Legacy:  total_steps + n_stages  (derives the stage size — see below)
 
 # OR long form (curriculum):
 # stages:
@@ -159,21 +159,33 @@ variations:
       - volex_zero_overlay
 ```
 
-### ⚠️ Prefer `steps_per_stage` over `total_steps`
+### ⚠️ Always pin `steps_per_stage`
 
-Both work, but only one is safe to edit later.
+Any two of `steps_per_stage` / `total_steps` / `n_stages` determine the third, so
+all three pairings parse. But they are not equally safe:
+
+| Pairing | Derived | Safe to edit later? |
+|---|---|---|
+| `steps_per_stage` + `total_steps` | `n_stages` | ✅ best — raise the total, stages append |
+| `steps_per_stage` + `n_stages` | `total_steps` | ✅ raise `n_stages`, stages append |
+| `total_steps` + `n_stages` | **stage size** | ⚠️ legacy — see below |
 
 `checkpoints/stage_<i>.done` records *that stage K finished* — never how big it
-was. Under `total_steps` + `n_stages`, stage size is derived, so changing either
-number silently resizes **every** stage, including the ones already marked done.
-Bump `total_steps: 3M → 4.5M` on a run that's finished 9 of 10 stages and those
-nine markers now claim to represent 450k steps of training that never happened;
-resume builds on them without complaint.
+was. So stage size is the one quantity resume silently depends on. Derive it and
+changing either other number resizes **every** stage, including ones already
+marked done: bump `total_steps: 12M → 18M` on a run that's finished 30 of 40
+stages and those thirty markers now claim 450k steps of training that never
+happened, which resume then builds on without complaint.
 
-Under `steps_per_stage`, extending an experiment is `n_stages: 10 → 15`. One
-number moves, no existing stage changes meaning, and the new stages append. The
-only safe edit to a legacy def is to scale both numbers together so the ratio
-holds.
+Pin `steps_per_stage` and that can't happen — raising `total_steps` only appends
+stages. The two must divide evenly; if they don't you get an error naming the
+two nearest usable totals, so there's no arithmetic to do by hand.
+
+Giving all three is allowed and cross-checked (a contradiction is an error, not
+a silent winner). The only safe edit to a legacy def is to scale both numbers
+together so the ratio holds — or convert it, which is free when the derived size
+is already what you want (`12M / 40` → `steps_per_stage: 300_000`, identical
+stages, existing markers stay valid).
 
 ### Splitting one def across jobs — `--methods`
 

@@ -137,78 +137,97 @@ class ExperimentDef:
 # --- Loading ---------------------------------------------------------------
 
 def _expand_stages(raw: dict, exp_world_preset: list[str], src: Path) -> list[StageSpec]:
-    """Resolve one of three mutually exclusive forms:
+    """Resolve the stage list from either the `stages:` long form or any TWO of
+    the three scalars below (the third is derived; giving all three is allowed
+    and checked for consistency).
 
-      `steps_per_stage` + `n_stages`   preferred — stage size is authored
-      `total_steps`     + `n_stages`   legacy    — stage size is derived
-      `stages:` list                   explicit  — per-stage worlds
+      steps_per_stage + total_steps    ✅ best — author the budget and the
+                                          granularity, n_stages is derived
+      steps_per_stage + n_stages       ✅ fine — total is derived
+      total_steps     + n_stages       ⚠️ legacy — the STAGE SIZE is derived
 
-    Prefer `steps_per_stage`. Stage size is the quantity the resume machinery
-    actually depends on: `checkpoints/stage_<i>.done` records *that stage K
-    finished*, never how big it was. Under the legacy form, editing either
-    `total_steps` or `n_stages` silently resizes every stage — including ones
-    already marked done, which then claim to represent an amount of training
-    that never happened, and resume builds on them without complaint. Under the
-    preferred form, extending an experiment is `n_stages: 10 -> 15`: one number
-    moves, no existing stage changes meaning, and the new stages simply append.
+    Why the last one is the bad pair. `checkpoints/stage_<i>.done` records
+    *that stage K finished*, never how big it was — so stage size is the one
+    quantity resume silently depends on. Derive it, and editing either of the
+    other two resizes every stage including the ones already marked done: bump
+    `total_steps` 12M → 18M on a run that finished 30 of 40 stages and those 30
+    markers now claim 450k steps of training that never happened, which resume
+    then builds on without complaint.
+
+    Pin `steps_per_stage` and that can't happen. Raising `total_steps` just
+    appends stages; every finished one keeps its meaning.
     """
-    forms = {
-        "steps_per_stage": "steps_per_stage" in raw,
-        "total_steps": "total_steps" in raw,
-        "stages": "stages" in raw,
-    }
-    given = [k for k, v in forms.items() if v]
-    if len(given) > 1:
-        raise ValueError(
-            f"{src}: `{'`, `'.join(given)}` are mutually exclusive — pick one "
-            f"of `steps_per_stage:` + `n_stages:` (preferred), "
-            f"`total_steps:` + `n_stages:` (legacy), or `stages:`.")
-    if not given:
-        if "n_stages" in raw:
+    if "stages" in raw:
+        clashes = [k for k in ("steps_per_stage", "total_steps", "n_stages")
+                   if k in raw]
+        if clashes:
             raise ValueError(
-                f"{src}: `n_stages:` needs `steps_per_stage:` beside it "
-                f"(or `total_steps:`).")
+                f"{src}: `stages:` (long form) cannot be combined with "
+                f"`{'`, `'.join(clashes)}` — the long form already states every "
+                f"stage's size.")
+        raw_stages = raw["stages"] or []
+        if not raw_stages:
+            raise ValueError(f"{src}: `stages:` must contain at least one stage")
+        out = []
+        for i, s in enumerate(raw_stages):
+            if "steps" not in s:
+                raise ValueError(f"{src}: stage {i} missing `steps:`")
+            # accept legacy plural `world_presets:`
+            wp = s.get("world_preset", s.get("world_presets"))
+            wp_list = as_preset_list(wp) if wp is not None else None
+            out.append(StageSpec(steps=int(s["steps"]), world_preset=wp_list))
+        return out
+
+    per = raw.get("steps_per_stage")
+    total = raw.get("total_steps")
+    n = raw.get("n_stages")
+    for key, val in (("steps_per_stage", per), ("total_steps", total),
+                     ("n_stages", n)):
+        if val is not None and int(val) <= 0:
+            raise ValueError(f"{src}: {key} must be > 0, got {val}")
+    per = int(per) if per is not None else None
+    total = int(total) if total is not None else None
+    n = int(n) if n is not None else None
+
+    if sum(x is not None for x in (per, total, n)) < 2:
         raise ValueError(
-            f"{src}: experiment def must specify either `steps_per_stage:` + "
-            f"`n_stages:`, `total_steps:` + `n_stages:`, or `stages:`.")
+            f"{src}: give any two of `steps_per_stage:`, `total_steps:`, "
+            f"`n_stages:` (or use the `stages:` long form). Preferred pairing "
+            f"is steps_per_stage + total_steps.")
 
-    if forms["steps_per_stage"] or forms["total_steps"]:
-        n = int(raw.get("n_stages", 1))
-        if n <= 0:
-            raise ValueError(f"{src}: n_stages must be > 0, got {n}")
+    if per is not None and total is not None:
+        # The ergonomic pairing: you state a budget and a granularity, and the
+        # stage count follows. Must divide evenly — a ragged final stage would
+        # reintroduce exactly the hazard this pairing avoids, because raising
+        # total_steps later would resize that already-completed short stage.
+        derived_n = total // per
+        if derived_n * per != total:
+            low, high = derived_n * per, (derived_n + 1) * per
+            raise ValueError(
+                f"{src}: total_steps={total:,} is not a multiple of "
+                f"steps_per_stage={per:,}. Nearest usable totals: "
+                f"{low:,} ({derived_n} stages) or {high:,} "
+                f"({derived_n + 1} stages).")
+        if n is not None and n != derived_n:
+            raise ValueError(
+                f"{src}: n_stages={n} contradicts total_steps={total:,} / "
+                f"steps_per_stage={per:,} = {derived_n}. Drop n_stages, or fix "
+                f"it to {derived_n}.")
+        n = derived_n
+    elif per is not None:
+        total = per * n
+    else:
+        per = total // n
+        if per <= 0:
+            raise ValueError(
+                f"{src}: total_steps={total:,} / n_stages={n} rounds down to "
+                f"{per} steps per stage.")
+        if per * n != total:
+            print(f"[experiment_def] WARNING: {src.name}: total_steps="
+                  f"{total:,} not divisible by n_stages={n}; truncating each "
+                  f"stage to {per:,} steps (loss = {total - per*n:,}).")
 
-        if forms["steps_per_stage"]:
-            per = int(raw["steps_per_stage"])
-            if per <= 0:
-                raise ValueError(
-                    f"{src}: steps_per_stage must be > 0, got {per}")
-        else:
-            total = int(raw["total_steps"])
-            if total <= 0:
-                raise ValueError(f"{src}: total_steps must be > 0, got {total}")
-            per = total // n
-            if per <= 0:
-                raise ValueError(
-                    f"{src}: total_steps={total} / n_stages={n} rounds down to "
-                    f"{per} steps per stage.")
-            if per * n != total:
-                print(f"[experiment_def] WARNING: {src.name}: total_steps="
-                      f"{total} not divisible by n_stages={n}; truncating each "
-                      f"stage to {per} steps (loss = {total - per*n}).")
-        return [StageSpec(steps=per, world_preset=None) for _ in range(n)]
-
-    raw_stages = raw["stages"] or []
-    if not raw_stages:
-        raise ValueError(f"{src}: `stages:` must contain at least one stage")
-    out = []
-    for i, s in enumerate(raw_stages):
-        if "steps" not in s:
-            raise ValueError(f"{src}: stage {i} missing `steps:`")
-        # accept legacy plural `world_presets:`
-        wp = s.get("world_preset", s.get("world_presets"))
-        wp_list = as_preset_list(wp) if wp is not None else None
-        out.append(StageSpec(steps=int(s["steps"]), world_preset=wp_list))
-    return out
+    return [StageSpec(steps=per, world_preset=None) for _ in range(n)]
 
 
 def _parse_methods(raw_methods, default_n_seeds: int, src: Path) -> list[MethodSpec]:
