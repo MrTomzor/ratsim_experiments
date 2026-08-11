@@ -191,13 +191,23 @@ class Job:
         return p
 
     def concurrency(self) -> int:
-        """How many runs fit at once: greedy over cpu_slot, since every profile
-        on these machines needs the same 16. Reported so the printed plan says
-        what you're actually buying."""
+        """How many of this job's runs fit at once. Reported so the printed plan
+        says what you're actually buying.
+
+        Bounded by GPUs as well as cpu_slot: a bucket where every method needs a
+        card cannot exceed the card count, however many cores are free. Only
+        applied when *every* method in the bucket needs one — a mixed bucket can
+        pack CPU runs into the spare cores, and calling that out exactly would
+        mean replaying the scheduler's bin-packing here."""
         profs = self.machine.get("method_profiles") or {}
-        per = [int((p.get("needs") or {}).get("cpu_slot", 0)) for p in profs.values()]
-        smallest = min([p for p in per if p > 0], default=self.cpus)
-        return max(1, min(self.n_runs, self.cpus // smallest))
+        mine = self.methods or list(profs)
+        needs = [(profs.get(m) or {}).get("needs") or {} for m in mine]
+        per_cpu = [int(n.get("cpu_slot", 0)) for n in needs]
+        smallest = min([c for c in per_cpu if c > 0], default=self.cpus)
+        fit = self.cpus // smallest
+        if needs and all(int(n.get("gpu", 0)) > 0 for n in needs):
+            fit = min(fit, self.gpus // min(int(n["gpu"]) for n in needs))
+        return max(1, min(self.n_runs, fit))
 
 
 def plan(exp, args) -> list[Job]:
