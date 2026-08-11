@@ -1,7 +1,7 @@
 # RCI cluster (CTU) — AMD **GPU** node (g[01-12], 4x A100-SXM4-40GB).
 #
-# Use this for dreamer and recurrent_ppo. For a CPU-only PPO sweep use
-# `--machine rci`, which gets a much bigger CPU allocation (see that file).
+# Use this for dreamer. For PPO or RecurrentPPO — neither of which needs a card
+# — use `--machine rci`, which gets a much bigger CPU allocation (see that file).
 #
 #   sbatch -p amdgpu --gres=gpu:1 --cpus-per-task=31 --mem=100G \
 #          rci_port_probes/scheduler_job.sbatch <exp>
@@ -86,10 +86,13 @@ method_profiles:
 
   recurrent_ppo:
     needs:
-      gpu: 1
       cpu_slot: 16
     args:
-      method.device: cuda
+      # No GPU need — see rci.yaml's recurrent_ppo profile for the measurement.
+      # Kept here (rather than deleted) so a def mixing dreamer and
+      # recurrent_ppo still validates against this file; it just runs the
+      # RecurrentPPO seeds on the node's cores instead of the card.
+      method.device: cpu
 
   dreamer:
     needs:

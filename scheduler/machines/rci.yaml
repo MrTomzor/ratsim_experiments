@@ -1,8 +1,11 @@
-# RCI cluster (CTU) — AMD CPU node. **PPO only; no GPU here.**
+# RCI cluster (CTU) — AMD CPU node. **PPO and RecurrentPPO; no GPU here.**
 #
-# For dreamer or recurrent_ppo use `--machine rci_gpu` instead: the `amd*`
-# partitions map to a[01-16], which have no accelerators at all, so a def
-# containing a GPU method will (correctly) fail validation against this file.
+# For dreamer use `--machine rci_gpu2` instead: the `amd*` partitions map to
+# a[01-16], which have no accelerators at all, so a def containing a GPU method
+# will (correctly) fail validation against this file.
+#
+# RecurrentPPO lives here as of 2026-08-11 — measured at 1.6% off the A100
+# end-to-end, see its profile below.
 #
 #   sbatch rci_port_probes/scheduler_job.sbatch <exp>
 #   # or by hand, inside a job:
@@ -77,4 +80,34 @@ method_profiles:
     args:
       # CPU beats GPU for a small MLP anyway: per-step host<->device transfer
       # costs more than the forward pass saves.
+      method.device: cpu
+
+  recurrent_ppo:
+    needs:
+      cpu_slot: 16
+    args:
+      # Measured, jobs 11331089 / 11331234 (A100 vs this node's CPU, same node,
+      # same allocation, one variable):
+      #
+      #   optimization   6.58 s (cuda)  vs  8.68 s (cpu)   -> cuda 1.32x
+      #   rollout       25.97 s (cuda)  vs 24.39 s (cpu)   -> CPU 6% FASTER
+      #   iteration     32.55 s         vs 33.07 s         -> 1.6% apart
+      #
+      # The card buys ~1.6% end to end, so it does not earn a GPU slot that a
+      # dreamer seed would otherwise fill.
+      #
+      # Why so little: `deep_memory` sets n_steps = episode_max_steps, so an
+      # update backpropagates through a 5000-step LSTM unroll -- ~400k
+      # *dependent* cell-steps per optimization phase, at a batch dimension of
+      # 1-2. A direct sweep on the A100 (nn.LSTM(100,256), seq 5000, fwd+bwd)
+      # showed 114.0 ms at batch 1 and 150.7 ms at batch 64: 64x the work for
+      # 1.32x the time, i.e. the card is latency-bound and ~99.8% idle. There
+      # is no parallelism in a sequential unroll for a GPU to exploit.
+      #
+      # Not a fixable transfer problem -- the H2D/D2H traffic on that path adds
+      # up to <0.5% of the phase. And rollout is 80% of an iteration, so even a
+      # free optimization phase would only be 21% better than CPU.
+      #
+      # Revisit if the LSTM grows a lot or n_steps shrinks: both raise the
+      # arithmetic per launch, which is the one thing that would change this.
       method.device: cpu

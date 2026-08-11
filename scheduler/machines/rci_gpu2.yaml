@@ -89,10 +89,18 @@ method_profiles:
 
   recurrent_ppo:
     needs:
-      gpu: 1
       cpu_slot: 16
     args:
-      method.device: cuda
+      # No GPU need — measured, not assumed. An A100 is worth 1.6% end-to-end
+      # here because a 5000-step LSTM unroll at batch 1-2 is latency-bound
+      # (64x the work for 1.32x the time on a direct batch sweep). Full numbers
+      # in rci.yaml's recurrent_ppo profile, which is where these runs belong:
+      # 7 slots there, and here they were taking a card from dreamer.
+      #
+      # This `needs` block is also what routes the method: submit.py's
+      # needs_gpu() reads needs.gpu from the GPU machine config, so dropping it
+      # here is what actually sends recurrent_ppo to the CPU job.
+      method.device: cpu
 
   dreamer:
     needs:
