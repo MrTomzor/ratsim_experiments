@@ -171,9 +171,19 @@ def running_usage(partitions: set[str]) -> tuple[int, int] | None:
 # ---------------------------------------------------------------------------
 
 class Job:
-    def __init__(self, machine: dict, methods: list[str] | None, n_runs: int):
+    def __init__(self, machine: dict, methods: list[str], n_runs: int,
+                 emit_filter: bool):
         self.machine = machine
-        self.methods = methods          # None = the whole def, no --methods
+        # Always the real method list this job runs — concurrency() and the
+        # printed plan both need it. Whether to pass --methods on the CLI is a
+        # separate question (emit_filter): a job that happens to own the whole
+        # def needs no filter, but still runs a specific set of methods. Keeping
+        # these as one nullable field was a bug twice: it dropped the flag under
+        # --only, and it made concurrency() fall back to the machine's full
+        # profile list, which includes CPU-only methods and so silently
+        # disabled the GPU bound below.
+        self.methods = methods
+        self.emit_filter = emit_filter
         self.n_runs = n_runs
         res = machine.get("resources") or {}
         sb = machine.get("sbatch") or {}
@@ -200,8 +210,7 @@ class Job:
         pack CPU runs into the spare cores, and calling that out exactly would
         mean replaying the scheduler's bin-packing here."""
         profs = self.machine.get("method_profiles") or {}
-        mine = self.methods or list(profs)
-        needs = [(profs.get(m) or {}).get("needs") or {} for m in mine]
+        needs = [(profs.get(m) or {}).get("needs") or {} for m in self.methods]
         per_cpu = [int(n.get("cpu_slot", 0)) for n in needs]
         smallest = min([c for c in per_cpu if c > 0], default=self.cpus)
         fit = self.cpus // smallest
@@ -219,7 +228,8 @@ def plan(exp, args) -> list[Job]:
         # --methods. This is the escape hatch for "put all 12 runs on the GPU
         # node" (PPO gets masked off the cards — verified in §0.96).
         mc = load_machine_raw(args.machine)
-        return [Job(mc, None, sum(runs_per_method.values()))]
+        return [Job(mc, list(runs_per_method), sum(runs_per_method.values()),
+                    emit_filter=False)]
 
     gpu_methods = [m.name for m in exp.methods if needs_gpu(gpu_machine, m.name)]
     cpu_methods = [m.name for m in exp.methods if m.name not in gpu_methods]
@@ -240,8 +250,8 @@ def plan(exp, args) -> list[Job]:
 
     def mk(machine, methods):
         owns_all = set(methods) == all_methods
-        return Job(machine, None if owns_all else methods,
-                   sum(runs_per_method[m] for m in methods))
+        return Job(machine, methods, sum(runs_per_method[m] for m in methods),
+                   emit_filter=not owns_all)
 
     jobs = []
     if cpu_methods:
@@ -332,7 +342,7 @@ def main():
         if job.gpus:
             cmd.append(f"--gres=gpu:{job.gpus}")
         cmd += [str(script), args.exp, "--machine", job.machine["_name"]]
-        if job.methods:
+        if job.emit_filter:
             cmd += ["--methods", ",".join(job.methods)]
         if args.mode:
             cmd += ["--mode", args.mode]
@@ -340,7 +350,7 @@ def main():
         cmds.append((job, part, cmd))
 
         gres = f", {job.gpus}×GPU" if job.gpus else ""
-        what = ",".join(job.methods) if job.methods else "all methods"
+        what = ",".join(job.methods)
         print(f"  → {part:<18} {job.cpus}t{gres}, {job.mem}   "
               f"{what}  ({job.n_runs} runs, {job.concurrency()} concurrent)")
 
