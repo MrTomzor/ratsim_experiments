@@ -57,6 +57,19 @@
 resources:
   cpu_slot: 112
 
+# How submit.sh turns this config into an sbatch line. Keeping it here is the
+# point: `resources.cpu_slot` and `--cpus-per-task` MUST agree (see above), and
+# the only way to guarantee that is to derive one from the other rather than
+# typing both. `partitions` maps wall-clock tier → partition name; submit.sh
+# picks the tier from --time.
+sbatch:
+  mem: 200G
+  partitions:
+    fast: amdfast              # 4 h
+    day: amd                   # 1 day
+    long: amdlong              # 3 days
+    extralong: amdextralong    # 21 days
+
 method_profiles:
   ppo:
     needs:

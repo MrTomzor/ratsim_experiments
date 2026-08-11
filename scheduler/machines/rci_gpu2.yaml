@@ -1,0 +1,114 @@
+# RCI cluster (CTU) — AMD **GPU** node, 2x A100. The verified multi-GPU config.
+#
+# This is the shape that was actually exercised on hardware, and it is the
+# default GPU target for `submit.sh`. Prefer it over rci_gpu.yaml (1 card),
+# which fits only one run at a time.
+#
+#   sbatch -p amdgpu --gres=gpu:2 --cpus-per-task=62 --mem=200G \
+#          rci_port_probes/scheduler_job.sbatch <exp> --machine rci_gpu2
+#   # or let submit.sh derive all of that:
+#   ./submit.sh <exp> --time 1d
+#
+# ---------------------------------------------------------------------------
+# Verified: jobs 11325473 / 11325609, node g12, `--gres=gpu:2 --cpus-per-task=62
+# --mem=200G` (RCI_CLUSTER_PORT.md §0.96). 3 dreamer seeds + 2 PPO seeds, BFS.
+#
+# All three allocator behaviours were confirmed from *outside* the scheduler, by
+# sampling `nvidia-smi --query-compute-apps` every 10 s — not by the scheduler
+# agreeing with itself:
+#
+#   concurrent dreamers on distinct cards   seed0 -> gpu 0, seed1 -> gpu 1
+#   PPO masked off the GPUs entirely        4/4 dispatches gpu=none(masked)
+#   release -> reallocate                   seed2 took gpu 1 when seed1 ended
+#
+# Packing cost: 208 s and 210 s per 10k-step stage against a 152 s solo A100
+# baseline (§0.56) — each run holds 73% of solo, two together give 1.44x
+# aggregate. Per-run slower, total throughput up, which is the point. The loss
+# is CPU-side (Unity) contention, not GPU. Three samples only; §0.96 marks these
+# indicative rather than measured.
+#
+# ---------------------------------------------------------------------------
+# Why 62 threads.
+#
+# g[01-10] allow 124 threads across 4 A100s, so one card's fair share is
+# 124/4 = 31 and two cards is 62. Taking more with `--gres=gpu:2` strands cards
+# nobody else can schedule. See RCI_CLUSTER_PORT.md §0.55.
+#
+# What fits at cpu_slot 62, given every profile needs 16 (~4 threads per env at
+# the pinned n_envs=4, see rci.yaml for the cliff measurement):
+#
+#   2 dreamers (32) + 1 PPO (16) = 48  ✅ both cards busy, one core group spare
+#   a 4th run would need 64 > 62       ❌
+#
+# So 3 concurrent runs, which is what the verification job ran.
+#
+# ---------------------------------------------------------------------------
+# Going wider — ⚠️ NOT verified.
+#
+# A whole g[01-10] node is `gpu: 4, cpu_slot: 124`. Nothing has exercised it
+# (BACKLOG.md "Multi-GPU verified at 2 cards, not 4"). Two things could differ:
+# whether the 73%-of-solo packing cost holds as more Unity instances contend for
+# the same cores, and whether --mem needs raising (dreamer's max_ram_gb: 30 x 4
+# = 120 GB plus Unity). Measure before trusting a 4-card config.
+#
+# Note the account's GPU ceiling is an *aggregate* across all your running jobs:
+# 8 cards on the *fast and 1-day partitions, **6 on the 3-day ones** (§0.55).
+#
+# 🚫 Do NOT retarget this at the h200* partitions. The admin rule is to use
+# those only at high utilisation, and one dreamer world model will not
+# saturate one H200.
+# ---------------------------------------------------------------------------
+
+resources:
+  gpu: 2
+  cpu_slot: 62
+
+# How submit.sh turns this config into an sbatch line — --gres=gpu:2,
+# --cpus-per-task=62, --mem=200G, partition by wall-clock tier. Derived rather
+# than typed so the allocation and `resources` above cannot drift apart.
+#
+# 200G covers 2 x dreamer's max_ram_gb: 30 with wide margin for Unity; the
+# verification job used the same figure.
+sbatch:
+  mem: 200G
+  partitions:
+    fast: amdgpufast           # 4 h
+    day: amdgpu                # 1 day
+    long: amdgpulong           # 3 days
+    extralong: amdgpuextralong # 21 days
+
+method_profiles:
+  ppo:
+    needs:
+      cpu_slot: 16
+    args:
+      # No GPU need: CPU beats GPU for a small MLP (per-step host<->device
+      # transfer costs more than the forward pass saves), which also leaves both
+      # A100s free for the dreamer runs alongside. Verified masked off the cards.
+      method.device: cpu
+
+  recurrent_ppo:
+    needs:
+      gpu: 1
+      cpu_slot: 16
+    args:
+      method.device: cuda
+
+  dreamer:
+    needs:
+      gpu: 1
+      cpu_slot: 16
+    # Known unfixed leak (~6-8 KB/env-step in the train process); the scheduler
+    # SIGTERMs and re-dispatches at this threshold. Keep --mem comfortably above
+    # 2 x this or SLURM's own OOM killer gets there first and the run just dies.
+    #
+    # ⚠️ This SIGTERM-and-resume path has never been exercised on the cluster
+    # (§0.1 "Readiness"). It *will* fire on a long dreamer run. Cheap way to
+    # prove it before trusting a 38 h job: set max_ram_gb: 4 so the watchdog
+    # trips within minutes, and check the run resumes from its checkpoint.
+    max_ram_gb: 30
+    args:
+      method.jax.platform: cuda
+      # NO compute_dtype override -- keep dreamerv3's bfloat16 default.
+      # float16 fails outright (§0.56: "Argument types differ from the types for
+      # which this computation was compiled"). The A100 has native bfloat16.

@@ -18,14 +18,17 @@
 # That is the same reasoning as the 18-threads-per-V100 figure on the Intel GPU
 # nodes (72 threads / 4 GPUs); see RCI_CLUSTER_PORT.md §0.55.
 #
-# 31 threads at the pinned n_envs=4 (~4 threads per env, see rci.yaml) is one
-# GPU run plus one PPO run alongside it, which is what the profiles below
-# encode. For N dreamers, see "Scaling to several GPUs" below.
+# ⚠️ At 31 threads this config runs **exactly one run at a time**. Both
+# profiles below need cpu_slot 16, and 16 + 16 = 32 > 31, so a dreamer run
+# leaves no room for the PPO run beside it. (An earlier version of this comment
+# claimed "one GPU run plus one PPO run alongside" — that was off by one
+# thread.) 31 is kept rather than rounded to 32 because it is the honest fair
+# share: g[01-10] allow 124 threads across 4 A100s, and four users each taking
+# 32 would not fit on the node.
 #
-# ⚠️ UNVERIFIED SIZING. The A100 dreamer timing is measured (§0.56: 152 s on a
-# 10k-step run, 1.25x a V100, identical at n_envs=1 and n_envs=4), but running
-# two methods concurrently in one GPU-node job has not been tested the way the
-# 7-wide PPO job was. Treat the concurrency numbers here as a starting point.
+# **For anything but a single run, use `rci_gpu2.yaml`** — 2 cards / 62 threads,
+# which fits 2 dreamers plus a PPO alongside and is the configuration actually
+# verified on hardware (§0.96). This file is the minimal single-card ask.
 #
 # ---------------------------------------------------------------------------
 # Scaling to several GPUs in one job.
@@ -61,6 +64,15 @@
 resources:
   gpu: 1
   cpu_slot: 31
+
+# See rci_gpu2.yaml — same shape, one card's worth.
+sbatch:
+  mem: 100G
+  partitions:
+    fast: amdgpufast           # 4 h
+    day: amdgpu                # 1 day
+    long: amdgpulong           # 3 days
+    extralong: amdgpuextralong # 21 days
 
 method_profiles:
   ppo:

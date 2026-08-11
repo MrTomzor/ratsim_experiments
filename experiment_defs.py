@@ -137,34 +137,64 @@ class ExperimentDef:
 # --- Loading ---------------------------------------------------------------
 
 def _expand_stages(raw: dict, exp_world_preset: list[str], src: Path) -> list[StageSpec]:
-    """Resolve the short form (`total_steps` + `n_stages`) or long form
-    (`stages:` list). Mutually exclusive."""
-    has_short = "total_steps" in raw or "n_stages" in raw
-    has_long = "stages" in raw
-    if has_short and has_long:
-        raise ValueError(
-            f"{src}: cannot mix `stages:` (long form) with `total_steps:` / "
-            f"`n_stages:` (short form). Pick one.")
-    if not has_short and not has_long:
-        raise ValueError(
-            f"{src}: experiment def must specify either `stages:` or "
-            f"`total_steps:` + `n_stages:`.")
+    """Resolve one of three mutually exclusive forms:
 
-    if has_short:
-        if "total_steps" not in raw or "n_stages" not in raw:
+      `steps_per_stage` + `n_stages`   preferred — stage size is authored
+      `total_steps`     + `n_stages`   legacy    — stage size is derived
+      `stages:` list                   explicit  — per-stage worlds
+
+    Prefer `steps_per_stage`. Stage size is the quantity the resume machinery
+    actually depends on: `checkpoints/stage_<i>.done` records *that stage K
+    finished*, never how big it was. Under the legacy form, editing either
+    `total_steps` or `n_stages` silently resizes every stage — including ones
+    already marked done, which then claim to represent an amount of training
+    that never happened, and resume builds on them without complaint. Under the
+    preferred form, extending an experiment is `n_stages: 10 -> 15`: one number
+    moves, no existing stage changes meaning, and the new stages simply append.
+    """
+    forms = {
+        "steps_per_stage": "steps_per_stage" in raw,
+        "total_steps": "total_steps" in raw,
+        "stages": "stages" in raw,
+    }
+    given = [k for k, v in forms.items() if v]
+    if len(given) > 1:
+        raise ValueError(
+            f"{src}: `{'`, `'.join(given)}` are mutually exclusive — pick one "
+            f"of `steps_per_stage:` + `n_stages:` (preferred), "
+            f"`total_steps:` + `n_stages:` (legacy), or `stages:`.")
+    if not given:
+        if "n_stages" in raw:
             raise ValueError(
-                f"{src}: short form requires both `total_steps:` and `n_stages:`.")
-        total = int(raw["total_steps"])
-        n = int(raw["n_stages"])
+                f"{src}: `n_stages:` needs `steps_per_stage:` beside it "
+                f"(or `total_steps:`).")
+        raise ValueError(
+            f"{src}: experiment def must specify either `steps_per_stage:` + "
+            f"`n_stages:`, `total_steps:` + `n_stages:`, or `stages:`.")
+
+    if forms["steps_per_stage"] or forms["total_steps"]:
+        n = int(raw.get("n_stages", 1))
         if n <= 0:
             raise ValueError(f"{src}: n_stages must be > 0, got {n}")
-        if total <= 0:
-            raise ValueError(f"{src}: total_steps must be > 0, got {total}")
-        per = total // n
-        if per * n != total:
-            print(f"[experiment_def] WARNING: {src.name}: total_steps={total} "
-                  f"not divisible by n_stages={n}; truncating each stage to "
-                  f"{per} steps (loss = {total - per*n}).")
+
+        if forms["steps_per_stage"]:
+            per = int(raw["steps_per_stage"])
+            if per <= 0:
+                raise ValueError(
+                    f"{src}: steps_per_stage must be > 0, got {per}")
+        else:
+            total = int(raw["total_steps"])
+            if total <= 0:
+                raise ValueError(f"{src}: total_steps must be > 0, got {total}")
+            per = total // n
+            if per <= 0:
+                raise ValueError(
+                    f"{src}: total_steps={total} / n_stages={n} rounds down to "
+                    f"{per} steps per stage.")
+            if per * n != total:
+                print(f"[experiment_def] WARNING: {src.name}: total_steps="
+                      f"{total} not divisible by n_stages={n}; truncating each "
+                      f"stage to {per} steps (loss = {total - per*n}).")
         return [StageSpec(steps=per, world_preset=None) for _ in range(n)]
 
     raw_stages = raw["stages"] or []
@@ -346,8 +376,9 @@ def build_inline_def(method_name: str, overrides: dict) -> ExperimentDef:
       agent, task, world   (string or list of preset names — map to
                             agent_preset / task_preset / world_preset
                             internally and in the YAML schema)
-      total_steps          (required if no `stages:`)
-      n_stages             (defaults to 1 if total_steps given alone)
+      steps_per_stage      (preferred; one of these three is required)
+      total_steps          (legacy alternative to steps_per_stage)
+      n_stages             (defaults to 1 if either is given alone)
       stages               (list of {steps, world_preset} dicts — rare on CLI)
       mode                 ('bfs' or 'dfs', meaningless with one method, default 'bfs')
       step_multiplier      (passes through; train.py applies it to stage.steps)
@@ -357,12 +388,13 @@ def build_inline_def(method_name: str, overrides: dict) -> ExperimentDef:
     for cli_key, raw_key in cli_alias.items():
         if cli_key in overrides:
             raw[raw_key] = overrides.pop(cli_key)
-    for key in ("total_steps", "n_stages", "stages",
+    for key in ("steps_per_stage", "total_steps", "n_stages", "stages",
                 "mode", "step_multiplier"):
         if key in overrides:
             raw[key] = overrides.pop(key)
-    # Inline default: if only total_steps is given, treat as a single stage.
-    if "total_steps" in raw and "n_stages" not in raw and "stages" not in raw:
+    # Inline default: a bare step count on the CLI means a single stage.
+    if ("n_stages" not in raw and "stages" not in raw
+            and ("total_steps" in raw or "steps_per_stage" in raw)):
         raw["n_stages"] = 1
     raw["methods"] = [{"name": method_name}]
     raw["seeds"] = 1

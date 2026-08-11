@@ -46,6 +46,47 @@ The `run` command is idempotent: stop it (Ctrl-C), restart with the same
 command. The scheduler scans `checkpoints/stage_<i>.done` markers under each
 run dir and dispatches whatever's missing next.
 
+## On the cluster — `submit.sh`
+
+Don't hand-write sbatch lines. You pick the experiment and how long you're
+willing to give it; partition, `--cpus-per-task`, `--gres`, `--mem` and any
+CPU/GPU split are derived from the def and `machines/*.yaml`:
+
+```bash
+./submit.sh gps_ablation_5house --time 1d
+./submit.sh method_compare      --time 4h --mode bfs     # short taster
+./submit.sh dreamer_ladder      --time 3d --dry-run      # print, don't submit
+```
+
+```
+method_compare: 7 runs (1 variations × [ppo×3, dreamer×3, recurrent_ppo×1] seeds),
+                10 stages × 1,000,000 steps
+  wall clock 3-00:00:00 → long partitions   mode bfs
+  → amdlong      112t, 200G          ppo                    (3 runs, 3 concurrent)
+  → amdgpulong   62t, 2×GPU, 200G    dreamer,recurrent_ppo  (4 runs, 3 concurrent)
+```
+
+Notes:
+
+- **`--time` picks the partition.** 4h → `amdfast`, 1d → `amd`, 3d → `amdlong`,
+  beyond → `amdextralong` (GPU equivalents `amdgpu*`). `scheduler_job.sbatch`
+  defaults to the 4 h smoke partition, which kills real runs mid-stage — this
+  removes that trap.
+- **Resume is the default**, so a 4 h taster you later extend to 3 days costs
+  nothing: same exp_id, same `.done` markers, same `wandb_id.txt`, so the W&B
+  curves continue rather than restarting.
+- **The account CPU/GPU caps are aggregate across all your running jobs**, not
+  per-job (RCI_CLUSTER_PORT.md §0.55). 200 CPUs on the 1-day and 3-day groups
+  means one 112-thread PPO job plus one 62-thread GPU job fits, and two
+  112-thread jobs don't — the second just pends forever with no error.
+  `submit.sh` checks `squeue` and warns before you hit it.
+- **`--mode` is never inferred.** Short job ≠ automatically bfs.
+- **Run it from login2/3/4**, not login1 (CentOS 7 / glibc 2.17 can't run the
+  venv's interpreter).
+
+`--machine <name>` forces everything into one job; `--only ppo` submits just one
+method's share.
+
 ## Folder layout
 
 ```
@@ -80,9 +121,13 @@ agent_preset: sphereagent_2d_lidar              # default, may be string or list
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: maze_default                      # default world for stages
 
-# Either short form (single-world experiments):
-total_steps: 10_000_000
-n_stages: 10                                    # → 10 equal stages of 1M each
+# Preferred: author the stage size, derive the total.
+steps_per_stage: 1_000_000
+n_stages: 10                                    # → 10M total
+
+# OR legacy short form — works, but see the warning below:
+# total_steps: 10_000_000
+# n_stages: 10                                  # → 10 equal stages of 1M each
 
 # OR long form (curriculum):
 # stages:
@@ -113,6 +158,51 @@ variations:
       - volumetric_exploration_2000_collision_penalty
       - volex_zero_overlay
 ```
+
+### ⚠️ Prefer `steps_per_stage` over `total_steps`
+
+Both work, but only one is safe to edit later.
+
+`checkpoints/stage_<i>.done` records *that stage K finished* — never how big it
+was. Under `total_steps` + `n_stages`, stage size is derived, so changing either
+number silently resizes **every** stage, including the ones already marked done.
+Bump `total_steps: 3M → 4.5M` on a run that's finished 9 of 10 stages and those
+nine markers now claim to represent 450k steps of training that never happened;
+resume builds on them without complaint.
+
+Under `steps_per_stage`, extending an experiment is `n_stages: 10 → 15`. One
+number moves, no existing stage changes meaning, and the new stages append. The
+only safe edit to a legacy def is to scale both numbers together so the ratio
+holds.
+
+### Splitting one def across jobs — `--methods`
+
+A def mixing PPO and dreamer can't run as one job: a scheduler process holds one
+allocation, and `machines/rci.yaml` has no dreamer profile at all (correctly —
+the `amd*` partitions have no accelerators). `--methods` lets each job claim its
+share, both feeding the same exp dir:
+
+```bash
+# CPU partition
+python scheduler_run.py gps_ablation --machine rci      --methods ppo
+# GPU partition, separate sbatch
+python scheduler_run.py gps_ablation --machine rci_gpu2 --methods dreamer
+```
+
+One exp_id, one W&B group, one `analyze_experiment.py`. Run dirs are disjoint
+because the method is part of `run_id`.
+
+Each filter gets **its own state file** (`state.ppo.json`, `state.dreamer.json`).
+That's load-bearing, not cosmetic: `state["running"]` holds child pids and the
+scheduler reaps every pid it finds there on startup, unable to distinguish a
+stale pid from its own crashed invocation from a live child of the sibling job.
+With one shared file, submitting the GPU job after the CPU job would kill all
+seven running PPO children. `scheduler_status.py` merges every `state*.json`, so
+status still shows one experiment.
+
+Under `--methods`, `--restart` wipes only that job's runs.
+
+Don't derive these commands by hand — `submit.sh` does it (below).
 
 ### Skipping the def for ad-hoc runs
 

@@ -3,9 +3,16 @@
 !.gitignore
 !default.yaml
 !gpu_example.yaml
-# rci*.yaml is a shared CTU cluster, not a personal box. Two shapes, because
-# one file cannot describe both node types: rci.yaml is the AMD CPU node
-# (a[01-16], no GPU), rci_gpu.yaml the AMD GPU node (g[01-12], A100).
+# rci*.yaml is a shared CTU cluster, not a personal box. Three shapes, because
+# one file cannot describe both node types or both GPU counts: rci.yaml is the
+# AMD CPU node (a[01-16], no GPU), rci_gpu.yaml one A100 on the AMD GPU node
+# (g[01-12]), rci_gpu2.yaml two.
+#
+# rci_gpu2.yaml is listed because this pattern already lost it once: the
+# 2-card config was validated on hardware in B4 (jobs 11325473/11325609) and
+# then silently ignored as a "local extra", so the repo kept only the 1-card
+# config that fits a single run. Add new shared cluster configs here.
 !rci.yaml
 !rci_gpu.yaml
+!rci_gpu2.yaml
 !README.md

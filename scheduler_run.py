@@ -12,7 +12,7 @@ you skip the `run` subcommand on the CLI.
 import argparse
 import os
 
-from scheduler.scheduler import cmd_run
+from scheduler.scheduler import _csv_list, cmd_run
 
 
 def main():
@@ -29,9 +29,23 @@ def main():
         "--step-multiplier", type=float, default=None,
         help="Override the def's step_multiplier (e.g. 0.01 for smoke tests).")
     p.add_argument(
+        "--mode", choices=("bfs", "dfs"), default=None,
+        help="Override the def's dispatch order for this job. dfs finishes "
+             "runs one at a time; bfs advances every run through the early "
+             "stages first. Not inferred from anything else.")
+    p.add_argument(
+        "--methods", type=_csv_list, default=None, metavar="M1,M2",
+        help="Run only these of the def's methods (comma-separated). Lets one "
+             "def be split across jobs on different partitions — e.g. "
+             "`--machine rci --methods ppo` on a CPU node and `--machine "
+             "rci_gpu2 --methods dreamer` on a GPU node, both feeding the same "
+             "exp_id. Each filter gets its own state file, so the two jobs do "
+             "not reap each other's children. submit.sh derives this for you.")
+    p.add_argument(
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "
-             "(equivalent to rm -rf + run). Default behavior is to resume.")
+             "(equivalent to rm -rf + run). Under --methods, wipes only that "
+             "job's runs. Default behavior is to resume.")
     p.add_argument(
         "--use-port-9000", action="store_true", dest="use_port_9000",
         help="Demo mode: forces n_envs=1 on every method (so the run is NOT "

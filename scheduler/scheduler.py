@@ -161,6 +161,42 @@ def resolve_exp_dir(arg: str) -> tuple[Path, Path]:
     return def_path, exp_results_dir
 
 
+def _csv_list(s: str) -> list[str]:
+    out = [p.strip() for p in s.split(",") if p.strip()]
+    if not out:
+        raise argparse.ArgumentTypeError("expected a comma-separated list")
+    return out
+
+
+def _state_filename(method_filter: list[str] | None) -> str:
+    """`state.json` for a whole-def job, `state.<methods>.json` for one that
+    owns a subset. Sorted so `--methods ppo,dreamer` and `--methods
+    dreamer,ppo` resume each other rather than forking two state files."""
+    if not method_filter:
+        return "state.json"
+    return f"state.{'-'.join(sorted(method_filter))}.json"
+
+
+def _merge_states(exp_dir: Path) -> dict:
+    """Union of every `state*.json` in the exp dir, for read-only reporting.
+
+    One experiment can be driven by several jobs (see _state_filename), each
+    owning its own file. `running` and `failed` concatenate; the timestamps take
+    the widest span, so "started" is the first job's start and "last activity"
+    is the most recent job's."""
+    states = [load_state(p) for p in sorted(exp_dir.glob("state*.json"))]
+    if not states:
+        return load_state(exp_dir / "state.json")
+    merged = load_state(exp_dir / "__nonexistent__.json")  # empty skeleton
+    for s in states:
+        merged["running"].extend(s.get("running") or [])
+        merged["failed"].extend(s.get("failed") or [])
+        for key, pick in (("started_at", min), ("last_event_at", max)):
+            vals = [v for v in (merged.get(key), s.get(key)) if v]
+            merged[key] = pick(vals) if vals else None
+    return merged
+
+
 def load_state(state_path: Path) -> dict:
     if state_path.exists():
         with open(state_path) as f:
@@ -714,7 +750,41 @@ def cmd_run(args):
                 forced.append(method)
         exp = replace(exp, methods=forced)
 
+    # --- --methods: run one job's share of a def --------------------------
+    # A def that mixes hardware classes (PPO on CPU, dreamer on GPU) cannot run
+    # as one job: one scheduler process holds one SLURM allocation, and rci.yaml
+    # correctly has no dreamer profile at all. So each job claims a subset of
+    # the def's methods and they run on the partition each one actually needs,
+    # both writing into the same exp dir — one exp_id, one W&B group, one
+    # analysis. `submit.sh` derives the split; this is the mechanism under it.
+    #
+    # The unfiltered def is kept for the snapshot below: experiment.yaml must
+    # describe the whole experiment, not whichever half happened to start first.
+    full_exp = exp
+    method_filter = getattr(args, "methods", None)
+    if method_filter:
+        known = {m.name for m in exp.methods}
+        unknown = [m for m in method_filter if m not in known]
+        if unknown:
+            raise SystemExit(
+                f"[scheduler] --methods: {', '.join(unknown)} not in "
+                f"{exp.exp_id} (has: {', '.join(sorted(known))})")
+        exp = replace(exp, methods=[m for m in exp.methods
+                                    if m.name in method_filter])
+        print(f"[scheduler] --methods {','.join(method_filter)}: running "
+              f"{len(exp.methods)} of {len(full_exp.methods)} methods "
+              f"(the rest are another job's share)")
+
     cfg.validate_against_machine(exp, machine)
+
+    # Dispatch order is a scheduling policy, not a property of the experiment,
+    # so it is overridable per job. Nothing infers it — a short job is not
+    # automatically bfs.
+    if getattr(args, "mode", None):
+        if args.mode != exp.mode:
+            print(f"[scheduler] --mode {args.mode} overrides def's "
+                  f"mode={exp.mode}")
+        exp = replace(exp, mode=args.mode)
 
     # CLI step-multiplier overrides the def-level one (with a warning if both set).
     step_multiplier = exp.step_multiplier
@@ -729,9 +799,24 @@ def cmd_run(args):
     # --restart wipes the existing exp dir before starting. Useful when you
     # want a clean run instead of resume — equivalent to manually
     # `rm -rf results/experiments/<exp_id>/`.
+    #
+    # Under --methods it wipes only THIS job's runs. Wiping the whole exp dir
+    # would destroy the sibling job's completed work — including runs it may be
+    # training right now — and a resubmit-with-restart is exactly when that
+    # would happen.
     if getattr(args, "restart", False) and exp_dir.exists():
-        print(f"[scheduler] --restart: wiping {exp_dir}")
-        shutil.rmtree(exp_dir)
+        if method_filter:
+            victims = [r.run_dir for r in expand_runs(exp, exp_dir)
+                       if r.run_dir.exists()]
+            print(f"[scheduler] --restart: wiping {len(victims)} run dir(s) for "
+                  f"methods {','.join(method_filter)} (leaving the rest of "
+                  f"{exp_dir.name} alone)")
+            for d in victims:
+                shutil.rmtree(d)
+            (exp_dir / _state_filename(method_filter)).unlink(missing_ok=True)
+        else:
+            print(f"[scheduler] --restart: wiping {exp_dir}")
+            shutil.rmtree(exp_dir)
 
     exp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -739,10 +824,20 @@ def cmd_run(args):
     snap_path = exp_dir / "experiment.yaml"
     if not snap_path.exists():
         with open(snap_path, "w") as f:
-            yaml.safe_dump(cfg.snapshot_experiment(exp), f, sort_keys=False)
+            # full_exp, not exp: under --methods this job only owns a subset,
+            # but the snapshot documents the experiment as a whole.
+            yaml.safe_dump(cfg.snapshot_experiment(full_exp), f, sort_keys=False)
         print(f"[scheduler] snapshotted def → {snap_path}")
 
-    state_path = exp_dir / "state.json"
+    # One state file per job, not per experiment. state["running"] holds child
+    # pids, and kill_orphans() reaps every pid it finds there on startup — it
+    # cannot tell "stale pid from my own crashed previous invocation" (which it
+    # must reap) from "live child of the sibling job" (which it must not). With
+    # a shared file, submitting the GPU job ten minutes after the CPU job would
+    # kill all seven running PPO children. Suffixing by the method filter gives
+    # each job its own list. No filter → plain state.json, so single-job
+    # experiments and existing result dirs are untouched.
+    state_path = exp_dir / _state_filename(method_filter)
     state = load_state(state_path)
     if state["started_at"] is None:
         state["started_at"] = datetime.now().isoformat(timespec="seconds")
@@ -1016,7 +1111,10 @@ def cmd_status(args):
     def_path, exp_dir = resolve_exp_dir(args.exp)
     exp = cfg.load_experiment_def(def_path)
     n_stages = len(exp.stages)
-    state = load_state(exp_dir / "state.json")
+    # Merge every job's state file: a def split across a CPU and a GPU job has
+    # a state.<methods>.json each, and status should show one experiment, not
+    # whichever half you happened to name.
+    state = _merge_states(exp_dir)
     runs = expand_runs(exp, exp_dir)
 
     started_at = state.get("started_at")
@@ -1206,6 +1304,19 @@ def main():
     p_run.add_argument(
         "--step-multiplier", type=float, default=None,
         help="Override the def's step_multiplier (e.g. 0.01 for smoke tests).")
+    p_run.add_argument(
+        "--mode", choices=("bfs", "dfs"), default=None,
+        help="Override the def's dispatch order for this job. dfs finishes "
+             "runs one at a time; bfs advances every run through the early "
+             "stages first. Not inferred from anything else.")
+    p_run.add_argument(
+        "--methods", type=_csv_list, default=None, metavar="M1,M2",
+        help="Run only these of the def's methods (comma-separated). Lets one "
+             "def be split across jobs on different partitions — e.g. "
+             "`--machine rci --methods ppo` on a CPU node and `--machine "
+             "rci_gpu2 --methods dreamer` on a GPU node, both feeding the same "
+             "exp_id. Each filter gets its own state file, so the two jobs do "
+             "not reap each other's children. submit.sh derives this for you.")
     p_run.add_argument(
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "
