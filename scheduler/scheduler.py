@@ -881,6 +881,27 @@ def cmd_run(args):
     resources = dict(machine.resources)
     if gpu_alloc.active:
         resources["gpu"] = min(resources.get("gpu", 0), len(gpu_alloc.devices))
+
+    # Same clamp for CPU threads, for the same reason and in the same direction.
+    # `cpu_slot` is declared as a *pool* in the machine config (rci.yaml: 112 =
+    # 7 slots of 16), but the cgroup is what actually exists: submit.py asks
+    # only for concurrency x per-run threads, and a hand-written sbatch can ask
+    # for anything at all. Believing the config over the allocation would
+    # dispatch 7 runs into 48 threads — the regime rci.yaml's cliff measurement
+    # calls catastrophic (4 runs in one 16-thread job took 1265 s against 339 s
+    # 2-wide). Before this clamp, under-asking on --cpus-per-task oversubscribed
+    # silently.
+    #
+    # Down only, exactly like the GPU clamp above: a config's cpu_slot is a
+    # deliberate ceiling, so an over-generous --cpus-per-task must not widen it.
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK", "")
+    declared = resources.get("cpu_slot", 0)
+    if slurm_cpus.isdigit() and declared and int(slurm_cpus) < declared:
+        print(f"[scheduler] cpu_slot {declared} → {slurm_cpus} "
+              f"(SLURM_CPUS_PER_TASK): the allocation is smaller than the "
+              f"machine config's pool, so the pool follows the allocation")
+        resources["cpu_slot"] = int(slurm_cpus)
+
     rm = ResourceManager(resources)
     # start= is 9100 on a laptop and a job-derived window under SLURM, so two
     # schedulers co-scheduled on one node don't both hand out 9100.

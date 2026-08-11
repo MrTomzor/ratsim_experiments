@@ -218,6 +218,32 @@ class Job:
             fit = min(fit, self.gpus // min(int(n["gpu"]) for n in needs))
         return max(1, min(self.n_runs, fit))
 
+    def cpu_request(self) -> int:
+        """Threads to actually ask SLURM for.
+
+        `resources.cpu_slot` is the machine's whole pool — rci.yaml's 112 is 7
+        slots of 16, sized for a job that has 7 runs to give it. A job with
+        fewer runs can never use that: concurrency() is the most that ever run
+        at once, so the remainder sits idle for the entire wall clock while
+        still counting against the per-user CPU cap (200 on the 1-day and
+        3-day groups). That cap is what decides how many jobs you can have in
+        flight, so over-asking costs experiments, not just politeness: 3 PPO
+        seeds + 3 dreamer seeds is 174 of 200 at the full pools and 80 at these.
+
+        Uses the LARGEST per-run need in the bucket, so a mixed bucket can
+        always host `concurrency()` of its heaviest method. Capped at the pool,
+        so this can only ever shrink the ask.
+
+        Safe because scheduler.py clamps its ResourceManager pool down to
+        SLURM_CPUS_PER_TASK — the two numbers cannot drift apart.
+        """
+        profs = self.machine.get("method_profiles") or {}
+        needs = [(profs.get(m) or {}).get("needs") or {} for m in self.methods]
+        per = max([int(n.get("cpu_slot", 0)) for n in needs], default=0)
+        if per <= 0:
+            return self.cpus
+        return min(self.cpus, self.concurrency() * per)
+
 
 def plan(exp, args) -> list[Job]:
     gpu_machine = load_machine_raw(args.gpu_machine)
@@ -337,8 +363,9 @@ def main():
     cmds = []
     for job in jobs:
         part = job.partition(tier)
+        cpus = job.cpu_request()
         cmd = ["sbatch", "-p", part, f"--time={slurm_time(seconds)}",
-               f"--cpus-per-task={job.cpus}", f"--mem={job.mem}"]
+               f"--cpus-per-task={cpus}", f"--mem={job.mem}"]
         if job.gpus:
             cmd.append(f"--gres=gpu:{job.gpus}")
         cmd += [str(script), args.exp, "--machine", job.machine["_name"]]
@@ -351,7 +378,10 @@ def main():
 
         gres = f", {job.gpus}×GPU" if job.gpus else ""
         what = ",".join(job.methods)
-        print(f"  → {part:<18} {job.cpus}t{gres}, {job.mem}   "
+        # Show the pool when we asked for less than it, so the shrink is visible
+        # rather than looking like the machine config changed under you.
+        threads = f"{cpus}t" if cpus == job.cpus else f"{cpus}t (of {job.cpus})"
+        print(f"  → {part:<18} {threads}{gres}, {job.mem}   "
               f"{what}  ({job.n_runs} runs, {job.concurrency()} concurrent)")
 
     # --- account ceiling ---------------------------------------------------
