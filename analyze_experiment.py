@@ -377,7 +377,8 @@ def python_for_method(method_name: str) -> str:
 def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                       deterministic: bool = False,
                       eval_metaseed: int = 42,
-                      ablate_memory: bool = False) -> None:
+                      ablate_memory: bool = False,
+                      spawn_unity: bool = False) -> None:
     """Sequentially shell out to eval_one_run.py for each run in its method's
     venv. Subprocess inherits stdout/stderr so per-episode progress streams
     live. Failures are reported but don't abort the loop — other runs still
@@ -415,6 +416,11 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
             cmd.append("--deterministic")
         if ablate_memory:
             cmd.append("--ablate-memory")
+        if spawn_unity:
+            # Without this each eval waits for a Unity on :9000 (see
+            # unity_attach.py) — right when you're watching in the Editor,
+            # wrong for an unattended batch on a headless box.
+            cmd.append("--spawn")
         print(f"\n[eval] === {r['run_id']} ===")
         print(f"[eval] cmd: {' '.join(cmd)}")
         rc = subprocess.run(cmd).returncode
@@ -495,6 +501,13 @@ def main() -> None:
                          "meaningful with --run-eval; without --run-eval the "
                          "ablation plot is still drawn from any cached "
                          "eval_episodes_ablated.jsonl files on disk.")
+    ap.add_argument("--spawn-unity", action="store_true", dest="spawn_unity",
+                    help="Let each eval spawn its own headless Unity build "
+                         "(needs $RATSIM_UNITY_BIN) instead of attaching to a "
+                         "running one on :9000. Default is to ATTACH and wait, "
+                         "so you can watch the policy in the Editor; use this "
+                         "for unattended batch eval. Only meaningful with "
+                         "--run-eval; automatic under SLURM.")
     args = ap.parse_args()
 
     if args.run_eval is not None and args.run_eval < 1:
@@ -517,7 +530,8 @@ def main() -> None:
         run_eval_for_runs(runs, exp_dir, args.run_eval,
                           deterministic=args.deterministic,
                           eval_metaseed=args.eval_metaseed,
-                          ablate_memory=args.ablate_memory)
+                          ablate_memory=args.ablate_memory,
+                          spawn_unity=args.spawn_unity)
         # Re-discover so newly written eval_episodes(_ablated).jsonl files are picked up.
         runs = discover_runs(exp_dir)
     else:

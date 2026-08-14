@@ -44,8 +44,9 @@ import dreamerv3  # noqa: F401 — registers agent modules
 from dreamerv3.main import wrap_env
 
 from ratsim.config_blender import blend_presets
-from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
+
+from unity_attach import add_unity_attach_args, resolve_unity_port
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
 
@@ -127,6 +128,7 @@ def main() -> None:
                          "boundaries). In-distribution amnesia — tests "
                          "whether the trained policy is actually using "
                          "recurrent memory.")
+    add_unity_attach_args(ap)
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -187,8 +189,7 @@ def main() -> None:
     task_config = blend_presets("task", task_preset)
     world_config = blend_presets("world", world_preset)
 
-    instances = allocate_unity_instances(n_envs=1)
-    port = instances[0].port
+    port = resolve_unity_port(args, tag="eval-dreamer")
     print(f"[eval-dreamer] unity_port:   {port}")
 
     eval_jsonl = run_dir / (

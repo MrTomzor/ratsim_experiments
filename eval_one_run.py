@@ -45,8 +45,9 @@ from pathlib import Path
 import numpy as np
 
 from ratsim.config_blender import blend_presets
-from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
+
+from unity_attach import add_unity_attach_args, resolve_unity_port
 
 from experiment_defs import (
     find_variation,
@@ -121,6 +122,7 @@ def main() -> None:
                          "in oscillation loops or against walls under "
                          "deterministic eval, because the same observation "
                          "always yields the same action.")
+    add_unity_attach_args(ap)
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -176,8 +178,7 @@ def main() -> None:
     task_config = blend_presets("task", task_preset)
     world_config = blend_presets("world", world_preset)
 
-    instances = allocate_unity_instances(n_envs=1)
-    port = instances[0].port
+    port = resolve_unity_port(args, tag="eval")
     print(f"[eval] unity_port:   {port}")
 
     # Wipe existing eval JSONL so episode_idx restarts at 1 — env.py counts
