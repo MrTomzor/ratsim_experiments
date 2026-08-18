@@ -42,10 +42,18 @@ def main():
              "exp_id. Each filter gets its own state file, so the two jobs do "
              "not reap each other's children. submit.sh derives this for you.")
     p.add_argument(
+        "--variations", type=_csv_list, default=None, metavar="V1,V2",
+        help="Run only these of the def's variations (comma-separated). For "
+             "continuing one cell of a ladder def without paying for the "
+             "others, e.g. `--variations consec4`. Combines with --methods; "
+             "each filter combination gets its own state file, so a job you "
+             "start later does not reap a sibling's children. submit.sh "
+             "passes this through from its own --variations.")
+    p.add_argument(
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "
-             "(equivalent to rm -rf + run). Under --methods, wipes only that "
-             "job's runs. Default behavior is to resume.")
+             "(equivalent to rm -rf + run). Under --methods / --variations, "
+             "wipes only that job's runs. Default behavior is to resume.")
     p.add_argument(
         "--use-port-9000", action="store_true", dest="use_port_9000",
         help="Demo mode: forces n_envs=1 on every method (so the run is NOT "

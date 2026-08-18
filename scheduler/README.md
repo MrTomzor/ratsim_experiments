@@ -85,7 +85,7 @@ Notes:
   venv's interpreter).
 
 `--machine <name>` forces everything into one job; `--only ppo` submits just one
-method's share.
+method's share; `--variations consec4` runs just one cell of a ladder def.
 
 ## Folder layout
 
@@ -213,6 +213,24 @@ seven running PPO children. `scheduler_status.py` merges every `state*.json`, so
 status still shows one experiment.
 
 Under `--methods`, `--restart` wipes only that job's runs.
+
+### Running one cell of a ladder — `--variations`
+
+Same mechanism, one axis over. A ladder def is several variants of one method
+(`variations:`), and often only one of them is worth continuing — giving the
+promising cell more steps without paying for the rest:
+
+```bash
+python scheduler_run.py ortho_wells_adaptive_nohomeprime_bigdreamer_ladder \
+    --machine rci_gpu2 --variations consec4
+```
+
+Run dirs are `<variation>__<method>__seed<i>`, so a filtered job writes into the
+same exp dir and the same W&B group; the other cells simply don't advance. It
+combines with `--methods`, and the pair picks the state file:
+`state.dreamer.json`, `state.v.consec4.json`, `state.dreamer.v.consec4.json` —
+so a ladder job started later doesn't reap a sibling's children. `--restart`
+under either filter wipes only that job's runs.
 
 Don't derive these commands by hand — `submit.sh` does it (below).
 

@@ -168,13 +168,22 @@ def _csv_list(s: str) -> list[str]:
     return out
 
 
-def _state_filename(method_filter: list[str] | None) -> str:
-    """`state.json` for a whole-def job, `state.<methods>.json` for one that
-    owns a subset. Sorted so `--methods ppo,dreamer` and `--methods
-    dreamer,ppo` resume each other rather than forking two state files."""
-    if not method_filter:
+def _state_filename(method_filter: list[str] | None,
+                    variation_filter: list[str] | None = None) -> str:
+    """`state.json` for a whole-def job, a suffixed name for one that owns a
+    subset: `state.<methods>.json`, `state.v.<variations>.json`, or both.
+
+    Sorted so `--methods ppo,dreamer` and `--methods dreamer,ppo` resume each
+    other rather than forking two state files. The methods-only form is
+    unchanged from before --variations existed, so old jobs still resume."""
+    parts = []
+    if method_filter:
+        parts.append("-".join(sorted(method_filter)))
+    if variation_filter:
+        parts.append("v." + "-".join(sorted(variation_filter)))
+    if not parts:
         return "state.json"
-    return f"state.{'-'.join(sorted(method_filter))}.json"
+    return f"state.{'.'.join(parts)}.json"
 
 
 def _merge_states(exp_dir: Path) -> dict:
@@ -775,6 +784,28 @@ def cmd_run(args):
               f"{len(exp.methods)} of {len(full_exp.methods)} methods "
               f"(the rest are another job's share)")
 
+    # --- --variations: run one job's share of a ladder ----------------------
+    # Same mechanism one axis over. A ladder def (e.g. the dreamer memory-hparam
+    # ladder) is several variants of ONE method, and often only one of them is
+    # worth continuing — extending the promising cell without paying for the
+    # rest. Run dirs are "<variation>__<method>__seed<i>", so a filtered job
+    # writes into the same exp dir and the same W&B group; only the cells it
+    # owns advance. Like --methods, it gets its own state file so a job started
+    # later does not reap a sibling's children.
+    variation_filter = getattr(args, "variations", None)
+    if variation_filter:
+        known = {v.name for v in exp.variations}
+        unknown = [v for v in variation_filter if v not in known]
+        if unknown:
+            raise SystemExit(
+                f"[scheduler] --variations: {', '.join(unknown)} not in "
+                f"{exp.exp_id} (has: {', '.join(sorted(known))})")
+        exp = replace(exp, variations=[v for v in exp.variations
+                                       if v.name in variation_filter])
+        print(f"[scheduler] --variations {','.join(variation_filter)}: running "
+              f"{len(exp.variations)} of {len(full_exp.variations)} variations "
+              f"(the rest are another job's share)")
+
     cfg.validate_against_machine(exp, machine)
 
     # Dispatch order is a scheduling policy, not a property of the experiment,
@@ -800,20 +831,26 @@ def cmd_run(args):
     # want a clean run instead of resume — equivalent to manually
     # `rm -rf results/experiments/<exp_id>/`.
     #
-    # Under --methods it wipes only THIS job's runs. Wiping the whole exp dir
+    # Under --methods / --variations it wipes only THIS job's runs. Wiping the
+    # whole exp dir
     # would destroy the sibling job's completed work — including runs it may be
     # training right now — and a resubmit-with-restart is exactly when that
     # would happen.
     if getattr(args, "restart", False) and exp_dir.exists():
-        if method_filter:
+        if method_filter or variation_filter:
             victims = [r.run_dir for r in expand_runs(exp, exp_dir)
                        if r.run_dir.exists()]
+            scope = ", ".join(
+                part for part in (
+                    f"methods {','.join(method_filter)}" if method_filter else "",
+                    f"variations {','.join(variation_filter)}" if variation_filter else "",
+                ) if part)
             print(f"[scheduler] --restart: wiping {len(victims)} run dir(s) for "
-                  f"methods {','.join(method_filter)} (leaving the rest of "
-                  f"{exp_dir.name} alone)")
+                  f"{scope} (leaving the rest of {exp_dir.name} alone)")
             for d in victims:
                 shutil.rmtree(d)
-            (exp_dir / _state_filename(method_filter)).unlink(missing_ok=True)
+            (exp_dir / _state_filename(method_filter, variation_filter)
+             ).unlink(missing_ok=True)
         else:
             print(f"[scheduler] --restart: wiping {exp_dir}")
             shutil.rmtree(exp_dir)
@@ -837,7 +874,7 @@ def cmd_run(args):
     # kill all seven running PPO children. Suffixing by the method filter gives
     # each job its own list. No filter → plain state.json, so single-job
     # experiments and existing result dirs are untouched.
-    state_path = exp_dir / _state_filename(method_filter)
+    state_path = exp_dir / _state_filename(method_filter, variation_filter)
     state = load_state(state_path)
     if state["started_at"] is None:
         state["started_at"] = datetime.now().isoformat(timespec="seconds")
@@ -1338,6 +1375,12 @@ def main():
              "rci_gpu2 --methods dreamer` on a GPU node, both feeding the same "
              "exp_id. Each filter gets its own state file, so the two jobs do "
              "not reap each other's children. submit.sh derives this for you.")
+    p_run.add_argument(
+        "--variations", type=_csv_list, default=None, metavar="V1,V2",
+        help="Run only these of the def's variations (comma-separated). For "
+             "continuing one cell of a ladder def without paying for the "
+             "others, e.g. `--variations consec4`. Combines with --methods; "
+             "each filter combination gets its own state file.")
     p_run.add_argument(
         "--restart", action="store_true",
         help="Wipe results/experiments/<exp_id>/ before starting "

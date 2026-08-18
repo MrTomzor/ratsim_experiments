@@ -4,6 +4,7 @@
     ./submit.sh gps_ablation_5house --time 1d
     ./submit.sh gps_ablation_5house --time 4h --mode bfs      # short taster
     ./submit.sh dreamer_ladder --time 3d --dry-run
+    ./submit.sh dreamer_ladder --time 3d --variations consec4 # one ladder cell
 
 You choose the experiment and how long you're willing to give it. Everything
 else — partition, --cpus-per-task, --gres, --mem, and how the def splits across
@@ -247,7 +248,12 @@ class Job:
 
 def plan(exp, args) -> list[Job]:
     gpu_machine = load_machine_raw(args.gpu_machine)
-    runs_per_method = {m.name: len(exp.variations) * m.n_seeds for m in exp.methods}
+    # --variations shrinks every method's run count, and that has to be counted
+    # here rather than left to the scheduler: cpu_request() sizes the SLURM ask
+    # from concurrency(), so continuing one cell of a 3-variant ladder should
+    # ask for one cell's worth of threads, not three.
+    n_vars = len(args.variations) if args.variations else len(exp.variations)
+    runs_per_method = {m.name: n_vars * m.n_seeds for m in exp.methods}
 
     if args.machine:
         # Explicit override: one job, everything on the named machine, no
@@ -326,6 +332,13 @@ def main():
                    default=None, metavar="M1,M2",
                    help="Submit only these methods' jobs (e.g. stage the CPU "
                         "half now and the GPU half later).")
+    p.add_argument("--variations", type=lambda s: [x.strip() for x in s.split(",") if x.strip()],
+                   default=None, metavar="V1,V2",
+                   help="Run only these of the def's variations (e.g. "
+                        "`--variations consec4` to continue one cell of a "
+                        "ladder). Same exp_id and W&B group; the other cells "
+                        "just don't advance. Resume still applies, so this is "
+                        "the way to give one variant more steps.")
     p.add_argument("--mode", choices=("bfs", "dfs"), default=None,
                    help="Override the def's dispatch order. dfs finishes runs "
                         "one at a time; bfs advances every run through early "
@@ -345,17 +358,32 @@ def main():
     if not def_path.exists():
         raise SystemExit(f"[submit] experiment def not found: {def_path}")
     exp = load_experiment_def(def_path)
+
+    # Check variation names here, not after the job is queued: a typo would
+    # otherwise cost a scheduling round-trip to discover.
+    if args.variations:
+        known = {v.name for v in exp.variations}
+        unknown = [v for v in args.variations if v not in known]
+        if unknown:
+            raise SystemExit(
+                f"[submit] --variations {','.join(unknown)} not in "
+                f"{exp.exp_id} (has: {', '.join(sorted(known))})")
+
     jobs = plan(exp, args)
 
     script = find_sbatch_script(args.sbatch_script)
 
     # Seeds are per-method (a def may give dreamer fewer than ppo), so the run
     # count is variations × sum-of-seeds, not a clean triple product.
-    total_runs = len(exp.variations) * sum(m.n_seeds for m in exp.methods)
+    n_vars = len(args.variations) if args.variations else len(exp.variations)
+    total_runs = n_vars * sum(m.n_seeds for m in exp.methods)
     n_stages = len(exp.stages)
     methods_desc = ", ".join(f"{m.name}×{m.n_seeds}" for m in exp.methods)
+    vars_desc = (f"{n_vars} variations [{','.join(args.variations)}] of "
+                 f"{len(exp.variations)}" if args.variations
+                 else f"{len(exp.variations)} variations")
     print(f"{exp.exp_id}: {total_runs} runs "
-          f"({len(exp.variations)} variations × [{methods_desc}] seeds), "
+          f"({vars_desc} × [{methods_desc}] seeds), "
           f"{n_stages} stages × {exp.stages[0].steps:,} steps")
     print(f"  wall clock {slurm_time(seconds)} → {tier} partitions   "
           f"mode {args.mode or exp.mode}")
@@ -371,6 +399,8 @@ def main():
         cmd += [str(script), args.exp, "--machine", job.machine["_name"]]
         if job.emit_filter:
             cmd += ["--methods", ",".join(job.methods)]
+        if args.variations:
+            cmd += ["--variations", ",".join(args.variations)]
         if args.mode:
             cmd += ["--mode", args.mode]
         cmd += passthrough
