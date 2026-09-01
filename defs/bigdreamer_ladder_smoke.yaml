@@ -1,0 +1,53 @@
+# Smoke test for ortho_wells_adaptive_nohomeprime_bigdreamer_ladder.
+#
+# WHY A SEPARATE DEF INSTEAD OF --step-multiplier: the multiplier shrinks the
+# stages but still writes stage_<i>.done into the REAL experiment's run dirs,
+# so the 1-day job would then skip those stages as finished after ~600 steps of
+# training. A separate exp id keeps the smoke's markers in its own results dir.
+#
+# What it has to prove, on an A100 (the ladder's first attempt ran on a V100
+# node, partition `gpu`, and died):
+#   1. bl256_c2 (batch_length 256 + consec_train 2) trains without the
+#      CUDA_ERROR_LAUNCH_FAILED / SIGSEGV it hit on the V100. Those crashes came
+#      166-290 s in, so a ~20k-step stage is long enough to reproduce them.
+#   2. bl256 runs at all — every seed of it died at Unity spawn last time, so
+#      the flagship cell has never actually been exercised.
+#   3. consec4 still works (it was the one run that survived).
+#   4. Unity spawns cleanly at 2-wide, and a stage boundary checkpoints.
+#
+# Everything below is copied verbatim from the real def except the step budget
+# and seeds: 1. Keep it that way — the point is to test that config, not a
+# lookalike.
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_ortho_wells_nohomeprime
+
+steps_per_stage: 20_000
+n_stages: 3
+
+adaptive_difficulty:
+  success_pickups: 4
+  step_up: 0.01
+  step_down: 0.01
+  d0: 0.0
+  ranges:
+    world_bounds/width:         {from: 80,  to: 200, round: 1}
+    world_bounds/height:        {from: 80,  to: 200, round: 1}
+    maze/n_rooms:               {from: 5,   to: 19,  round: 1}
+    maze/rooms/reward_room/min: {from: 3,   to: 17,  round: 1}
+    maze/rooms/reward_room/max: {from: 3,   to: 17,  round: 1}
+    maze/room_max_size_cells:   {from: 15,  to: 31,  round: 1}
+    wells/cue/range:            {from: 135, to: 300}
+
+mode: bfs
+
+methods:
+  - name: dreamer
+
+variations:
+  - {name: bl256_c2, method_args: {batch_length: 256, consec_train: 2}}
+  - {name: consec4,  method_args: {consec_train: 4}}
+  - {name: bl256,    method_args: {batch_length: 256}}
+
+seeds: 1
