@@ -12,10 +12,11 @@ world_preset: three_malls
 
 total_steps: 9_000_000
 n_stages: 30
-mode: dfs
+mode: bfs
 
 methods:
   # - name: recurrent_ppo
+  - name: ppo
   - name: dreamer
 
 seeds: 3
