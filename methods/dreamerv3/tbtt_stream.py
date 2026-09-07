@@ -96,6 +96,9 @@ class SequentialReplayStream:
         data = replay._assemble_batch(seqs, 0, replay.length)
         data = self._annotate(data, restarted)
         self._count(data, restarted)
+        # Keep replay/replay_ratio meaningful: Replay._sample counts one
+        # sample per row read and we bypass it.
+        replay.metrics["samples"] += self.batch_size
         return data
 
     def save(self):
