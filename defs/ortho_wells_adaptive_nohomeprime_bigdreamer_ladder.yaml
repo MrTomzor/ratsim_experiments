@@ -54,6 +54,7 @@ variations:
   # RAW config keys here (no `method.` prefix) — read by train_dreamerv3.py directly.
   - {name: bl256_c2, method_args: {batch_length: 256, consec_train: 2}}    # production candidate: 256 window + 512-step continuity
   - {name: consec4,  method_args: {consec_train: 4}}                       # 192-step fresh-carry chains, gradient window still 48
+  - {name: tbtt,     method_args: {tbtt.enabled: true, replay_context: 0}} # MemoryMaze Dreamer (TBTT): sequential replay, state carried across whole episodes, zero state at random restart offset; gradient window still 48
   - {name: bl256,    method_args: {batch_length: 256}}                     # flagship: window covers a full random→home cycle at low d
 
 seeds: 3

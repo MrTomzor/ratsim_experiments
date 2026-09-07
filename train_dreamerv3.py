@@ -48,6 +48,7 @@ from ratsim.unity_launcher import allocate_unity_instances
 from ratsim_wildfire_gym_env.env import WildfireGymEnv
 
 from methods.dreamerv3.env_adapter import GymnasiumToEmbodied
+from methods.dreamerv3 import tbtt_stream
 import wandb_integration
 
 from experiment_defs import (
@@ -191,6 +192,12 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
     config = elements.Config(raw["defaults"])
     config = config.update(raw[size])
 
+    # Our own keys, absent from upstream configs.yaml. elements.Config rejects
+    # unknown keys in update(), so they have to be declared before overrides.
+    # tbtt.enabled: MemoryMaze-style Dreamer (TBTT) -- see methods/dreamerv3/
+    # tbtt_stream.py. Pair it with replay_context=0 for the paper-exact variant.
+    config = elements.Config({**config, "tbtt": {"enabled": False}})
+
     # replay.size: dreamerv3's default of 5M is sized for Atari; we hold full
     # RSSM state per step (~3 KB), so a 5M buffer OOMs the cloud box. 1M is
     # plenty and keeps in-memory replay around 5-10 GB.
@@ -218,7 +225,20 @@ def build_config(method_overrides: dict, logdir: Path, total_steps: int, size: s
 
     if method_overrides:
         config = config.update(method_overrides)
+
+    if config.tbtt.enabled and config.consec_train != 1:
+        # The sequential stream reads one (batch_length + replay_context)
+        # window per row per step, so the replay must be built for consec=1;
+        # state continuity comes from the stream, not from consec chunking.
+        print(f"[dreamerv3] tbtt.enabled: forcing consec_train=1 "
+              f"(was {config.consec_train})")
+        config = config.update({"consec_train": 1})
     return config
+
+
+def make_stream_ratsim(config, replay, mode):
+    """`dreamerv3.main.make_stream`, or the TBTT sequential stream when enabled."""
+    return tbtt_stream.make_stream(config, replay, mode, fallback=make_stream)
 
 
 def make_logger(config, wandb_run=None):
@@ -448,6 +468,11 @@ def main():
             print(f"[dreamerv3]   batch_size={config.batch_size}, "
                   f"batch_length={config.batch_length}, "
                   f"train_ratio={config.run.train_ratio}")
+            print(f"[dreamerv3]   consec_train={config.consec_train}, "
+                  f"replay_context={config.replay_context}, "
+                  f"tbtt.enabled={config.tbtt.enabled}"
+                  + (" (sequential replay stream, MemoryMaze Dreamer+TBTT)"
+                     if config.tbtt.enabled else ""))
 
         args_cfg = elements.Config(
             **config.run,
@@ -471,7 +496,7 @@ def main():
                  episode_log_path=episode_log_path,
                  run_metadata=stage_run_metadata,
                  unity_ports=unity_ports),
-            bind(make_stream, config),
+            bind(make_stream_ratsim, config),
             bind(make_logger, config, wandb_run),
             args_cfg,
         )
