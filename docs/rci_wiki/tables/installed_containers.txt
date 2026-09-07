@@ -1,0 +1,253 @@
+====== Prepared singularity images ======
+
+Singularity images can be easy converted from docker images. But several images are available in **''/mnt/appl/singularity_images/''**.  Many of them are converted from [[https://ngc.nvidia.com|Nvidia GPU Cloud]] docker images. 
+
+
+===== caffe-19.03-py2.simg =====
+  
+[[https://docs.nvidia.com/deeplearning/dgx/caffe-user-guide/index.html|Caffe]] from [[https://docs.nvidia.com/ngc/ngc-introduction/index.html|NGC - NVIDIA GPU cloud]]. NVIDIA Caffe, also known as NVCaffe, is an NVIDIA-maintained fork of [[http://caffe.berkeleyvision.org/|BVLC Caffe]] tuned for NVIDIA GPUs, particularly in multi-GPU configurations. It includes multi-precision support as well as other NVIDIA-enhanced features and offers performance specially tuned for the NVIDIA Tesla cards.
+<code>
+eb@n21:~$ singularity run --nv /mnt/appl/singularity_images/caffe-19.03-py2.simg
+==================
+== NVIDIA Caffe ==
+==================
+
+NVIDIA Release 19.02 (build 5571846)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright (c) 2014, 2015, The Regents of the University of California (Regents)
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+user@n21:~$ mkdir /tmp/caffe/
+user@n21:~$ cp -r /opt/caffe/data /tmp/caffe/
+user@n21:~$ cp -r /opt/caffe/examples /tmp/caffe/
+user@n21:~$ cd /tmp/caffe/
+user@n21:/tmp/caffe$ cd data/mnist/get_mnist.sh
+user@n21:/tmp/caffe$ examples/mnist/create_mnist.sh
+user@n21:/tmp/caffe$ examples/mnist/train_lenet.sh
+I0415 11:32:28.031733 11393 parallel.cpp:44] P2PManager::Init, global rank: [0 of 1] @ n21
+I0415 11:32:28.390612 11393 caffe.cpp:709] This is NVCaffe 0.17.0 started at Mon Apr 15 11:32:28 2019
+I0415 11:32:28.390794 11393 caffe.cpp:711] CuDNN version: 7401
+I0415 11:32:28.390801 11393 caffe.cpp:712] CuBLAS version: 10000
+I0415 11:32:28.390808 11393 caffe.cpp:713] CUDA version: 10000
+I0415 11:32:28.390815 11393 caffe.cpp:714] CUDA driver version: 10010
+I0415 11:32:28.390826 11393 caffe.cpp:715] Arguments:
+[0]: caffe
+[1]: train
+[2]: --solver=examples/mnist/lenet_solver.prototxt
+I0415 11:32:28.401492 11393 caffe.cpp:220] Using GPUs 0
+I0415 11:32:28.594259 11393 gpu_memory.cpp:105] GPUMemory::Manager initialized
+I0415 11:32:28.595932 11393 gpu_memory.cpp:107] Total memory: 34058272768, Free: 33573437440, dev_info[0]: total=34058272768 free=33573437440
+I0415 11:32:28.596824 11393 caffe.cpp:227] GPU 0: Tesla V100-SXM2-32GB
+I0415 11:32:28.596925 11393 solver.cpp:40] Solver data type: FLOAT
+I0415 11:32:28.616060 11393 solver.cpp:43] Initializing solver from parameters:
+...
+</code>
+
+
+===== caffe2-18.08-py2.simg and caffe2-18.08-py3.simg =====
+[[https://docs.nvidia.com/deeplearning/dgx/caffe2-release-notes/overview.html|Caffe2]] from NGC for Python2 or Python3
+[[https://research.fb.com/downloads/caffe2/|Caffe2]] is a deep-learning framework designed to easily express all model types, for example, convolutional neural networks (CNNs), recurrent neural networks (RNNs), and more, in a friendly Python-based API, and execute them using a highly efficiently C++ and CUDA® backend. Caffe2 supports single and multi-GPU execution, along with support for multi-node execution.
+
+<code>
+user@n21:/tmp$singularity run /mnt/appl/singularity_images/caffe2-18.08-py2.simg
+
+============
+== Caffe2 ==
+============
+
+NVIDIA Release 18.08 (build 474749)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+All contributions by Facebook: Copyright (c) 2016, 2017 Facebook Inc.
+All contributions by Google: Copyright (c) 2015 Google Inc.  All rights reserved.
+All contributions by Yangqing Jia: Copyright (c) 2015 Yangqing Jia All rights reserved.
+All contributions from Caffe: Copyright(c) 2013, 2014, 2015, the respective contributors. All rights reserved.
+All other contributions: Copyright(c) 2015, 2016, 2017, the respective contributors. All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+vecerka@woska:/tmp$ python
+Python 2.7.12 (default, Dec  4 2017, 14:50:18)
+[GCC 5.4.0 20160609] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import caffe2
+</code>
+
+Shell is also possible:
+<code>
+woska::/tmp>singularity shell --nv /datagrid/singularity_images/caffe2-18.06-py3.simg
+Singularity: Invoking an interactive shell within container...
+
+Singularity caffe2-18.06-py3.simg:/tmp> python
+Python 3.5.2 (default, Nov 23 2017, 16:37:01)
+[GCC 5.4.0 20160609] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import caffe2
+</code>
+
+===== cntk-18.08-py3.simg =====
+
+[[https://docs.nvidia.com/deeplearning/dgx/cntk-release-notes/overview.html|Microsoft Cognitive Toolkit]] fron NGC for Python3.
+The Microsoft Cognitive Toolkit empowers you to harness the intelligence within massive datasets through deep learning by providing uncompromised scaling, speed and accuracy with commercial-grade quality and compatibility with the programming languages and algorithms you already use.
+
+
+===== mxnet-19.03-py2.simg and mxnet-19.03-py3.simg =====
+[[https://docs.nvidia.com/deeplearning/dgx/mxnet-release-notes/overview.html|MXNet framework]] from NGC for Python3
+MXNet is a deep learning framework designed for both efficiency and flexibility. It allows you to mix the flavors of symbolic programming and imperative programming to maximize efficiency and productivity. In its core is a dynamic dependency scheduler that automatically parallelizes both symbolic and imperative operations on the fly. A graph optimization layer on top of that makes symbolic execution fast and memory efficient. The library is portable and lightweight, and it scales to multiple GPUs and multiple machines.
+<code>
+woska:/tmp$ singularity run --nv /datagrid/singularity_images/mxnet-18.06-py2.simg
+===========
+== MXNet ==
+===========
+
+NVIDIA Release 18.06 (build 512371)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright (c) 2015-2016 by MXNet Contributors
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+woska:/tmp$ python
+Python 2.7.12 (default, Dec  4 2017, 14:50:18)
+[GCC 5.4.0 20160609] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import mxnet
+</code>
+
+
+===== pytorch-19.03-py3.simg =====
+[[https://docs.nvidia.com/deeplearning/dgx/pytorch-release-notes/overview.html|PyTorch]] from NGC for Python3
+PyTorch is a Python package that provides two high-level features:
+  * Tensor computation (like numpy) with strong GPU acceleration
+  * Deep Neural Networks built on a tape-based autograd system
+You can reuse your favorite Python packages such as numpy, scipy and Cython to extend PyTorch when needed.
+<code>
+user@n21:~$ singularity run --nv /mnt/appl/singularity_images/pytorch-19.03-py3.simg
+=============
+== PyTorch ==
+=============
+
+NVIDIA Release 19.03 (build 5869951)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+
+Copyright (c) 2016-     Facebook, Inc            (Adam Paszke)
+Copyright (c) 2014-     Facebook, Inc            (Soumith Chintala)
+Copyright (c) 2011-2014 Idiap Research Institute (Ronan Collobert)
+Copyright (c) 2012-2014 Deepmind Technologies    (Koray Kavukcuoglu)
+Copyright (c) 2011-2012 NEC Laboratories America (Koray Kavukcuoglu)
+Copyright (c) 2011-2013 NYU                      (Clement Farabet)
+Copyright (c) 2006-2010 NEC Laboratories America (Ronan Collobert, Leon Bottou, Iain Melvin, Jason Weston)
+Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
+Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+user@n21:~$ python
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 30 2018, 01:22:34)
+[GCC 7.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import torch
+
+</code>
+
+===== tensorflow-19.03-py2.simg and tensorflow-19.03-py3.simg =====
+[[https://docs.nvidia.com/deeplearning/dgx/tensorflow-user-guide/index.html|TensorFlow]] from NGC for Python3.
+TensorFlow is an open source software library for numerical computation using data flow graphs. Nodes in the graph represent mathematical operations, while the graph edges represent the multidimensional data arrays (tensors) that flow between them. This flexible architecture lets you deploy computation to one or more CPUs or GPUs in a desktop, server, or mobile device without rewriting code.
+<code>
+user@n21:~$ singularity run --nv /mnt/appl/singularity_images/tensorflow-19.03-py3.simg
+================
+== TensorFlow ==
+================
+
+NVIDIA Release 19.03 (build 5809531)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright 2017 The TensorFlow Authors.  All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+user@n21:~$ python
+Python 3.5.2 (default, Nov 12 2018, 13:43:14)
+[GCC 5.4.0 20160609] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import tensorflow as tf
+</code>
+
+===== theano-18.06.simg =====
+ [[https://docs.nvidia.com/deeplearning/dgx/theano-release-notes/overview.html|Theano]] from NGC.
+Theano is a Python library that allows you to define, optimize, and evaluate mathematical expressions involving multi-dimensional arrays efficiently.
+<code>
+users@n21:~$ singularity run --nv /mnt/appl/singularity_images/theano-18.06.simg
+============
+== Theano ==
+============
+
+NVIDIA Release 18.06 (build 474752)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright (c) 2008--2016, Theano Development Team
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+users@n21:~$ python
+Python 2.7.12 (default, Dec  4 2017, 14:50:18)
+[GCC 5.4.0 20160609] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import numpy
+>>> import pygpu
+>>> import theano.tensor as T
+Using cuDNN version 7104 on context None
+Preallocating 14616/32480 Mb (0.450000) on cuda
+Mapped name None to device cuda: Tesla V100-SXM2-32GB (0000:61:00.0)
+>>> from theano import function
+>>> x = T.dscalar('x')
+>>> y = T.dscalar('y')
+>>> z = x + y
+>>> f = function([x, y], z)
+>>> f(2, 3)
+array(5.)
+>>> numpy.allclose(f(16.3, 12.1), 28.4)
+True
+>>>
+</code>
+
+===== torch-18.06-py2.simg =====
+ [[https://docs.nvidia.com/deeplearning/dgx/torch-release-notes/overview.html|Torch]] from NGC.
+Torch is a scientific computing framework with wide support for deep learning algorithms. Torch is easy to use and efficient, thanks to an easy and fast scripting language, Lua, and an underlying C/CUDA implementation.
+<code>
+eb@n21:~$ singularity run --nv /mnt/appl/singularity_images/torch-18.06-py2.simg
+  ______             __   |  Torch7
+ /_  __/__  ________/ /   |  Scientific computing for Lua.
+  / / / _ \/ __/ __/ _ \  |
+ /_/  \___/_/  \__/_//_/  |  https://github.com/torch
+                          |  http://torch.ch
+
+NVIDIA Release 18.06 (build 474713)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright (c) 2016, Soumith Chintala, Ronan Collobert, Koray Kavukcuoglu, Clement Farabet
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+eb@n21:~$ /usr/local/bin/th
+
+  ______             __   |  Torch7
+ /_  __/__  ________/ /   |  Scientific computing for Lua.
+  / / / _ \/ __/ __/ _ \  |  Type ? for help
+ /_/  \___/_/  \__/_//_/  |  https://github.com/torch
+                          |  http://torch.ch
+
+th> 
+</code>
+
+===== CPU versions =====
+  * caffe_cpu.simg - [[https://hub.docker.com/r/bvlc/caffe/|Official CPU version]]
+  * caffe2.0.8.1_cpu.simg - [[https://hub.docker.com/r/caffe2ai/caffe2/|Official CPU version]]
+  * tensorflow.1.13.1_cpu.simg - [[https://hub.docker.com/r/tensorflow/tensorflow/|Official CPU version]]

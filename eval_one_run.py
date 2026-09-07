@@ -17,7 +17,12 @@ Writes:
 
 CLI:
     python eval_one_run.py --run_dir <path> --exp_dir <path> --n_episodes N
-                           [--eval_metaseed M]
+                           [--eval_metaseed M] [--difficulty D]
+
+`--difficulty D` (0..1) applies to defs with an `adaptive_difficulty:` block:
+the ranges are interpolated once at D and merged over the resolved world
+config, so every eval episode is generated at that fixed rung instead of
+wherever the training walk happened to end up.
 
 World preset is resolved from the FINAL stage of the experiment def — for
 curricula, that's the curriculum endpoint. Task and agent presets come from
@@ -53,6 +58,7 @@ from experiment_defs import (
     find_variation,
     load_experiment_def,
     resolve_agent_preset,
+    resolve_difficulty_overrides,
     resolve_stage_world,
     resolve_task_preset,
 )
@@ -122,8 +128,20 @@ def main() -> None:
                          "in oscillation loops or against walls under "
                          "deterministic eval, because the same observation "
                          "always yields the same action.")
+    ap.add_argument("--difficulty", type=float, default=None, metavar="D",
+                    help="Pin an adaptive-difficulty def's world at a fixed "
+                         "d in [0, 1] (0 = easiest, 1 = hardest) instead of "
+                         "evaluating at the def's base world config. The def's "
+                         "`adaptive_difficulty.ranges:` are interpolated once "
+                         "at d and merged over the final stage's world config; "
+                         "d never moves during the eval. Requires a def with an "
+                         "`adaptive_difficulty:` block. Recorded per episode in "
+                         "the eval JSONL as 'difficulty'.")
     add_unity_attach_args(ap)
     args = ap.parse_args()
+
+    if args.difficulty is not None and not 0.0 <= args.difficulty <= 1.0:
+        ap.error(f"--difficulty must be in [0, 1], got {args.difficulty}")
 
     run_dir = Path(args.run_dir).resolve()
     exp_dir = Path(args.exp_dir).resolve()
@@ -178,6 +196,19 @@ def main() -> None:
     task_config = blend_presets("task", task_preset)
     world_config = blend_presets("world", world_preset)
 
+    # Fixed difficulty: bake the def's adaptive-difficulty ranges, evaluated
+    # once at d, into the world config. No wrapper, so d stays put for every
+    # episode — the eval measures one rung of the ladder, not the walk.
+    if args.difficulty is not None:
+        try:
+            d_overrides = resolve_difficulty_overrides(exp, args.difficulty)
+        except ValueError as e:
+            print(f"[eval] ERROR: {e}")
+            sys.exit(1)
+        world_config = {**world_config, **d_overrides}
+        print(f"[eval] difficulty:   d={args.difficulty:.3f} -> "
+              f"world overrides: {d_overrides}")
+
     port = resolve_unity_port(args, tag="eval")
     print(f"[eval] unity_port:   {port}")
 
@@ -212,6 +243,10 @@ def main() -> None:
         run_metadata=run_metadata,
         unity_port=port,
     )
+    if args.difficulty is not None:
+        # Same field the AdaptiveDifficultyWrapper writes during training, so
+        # eval and train JSONLs stay one schema.
+        env.extra_log_fields["difficulty"] = round(args.difficulty, 6)
 
     if method_name in ("ppo", "cnn_ppo"):
         from stable_baselines3 import PPO

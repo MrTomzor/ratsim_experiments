@@ -1,0 +1,491 @@
+====== SLURM - job scheduler ======
+
+RCI cluser uses SLURM as job scheduler. [[https://slurm.schedmd.com/quickstart.html|Official quick start is here]].
+
+Basic commands are:
+
+**''sacct''** is used to report job or job step accounting information about active or completed jobs.
+
+**''salloc''** is used to allocate resources for a job in real time. Typically this is used to allocate resources and spawn a shell. The shell is then used to execute srun commands to launch parallel tasks.
+
+**''sinfo''** reports the state of partitions and nodes managed by Slurm. It has a wide variety of filtering, sorting, and formatting options.
+
+**''squeue''** reports the state of jobs or job steps. It has a wide variety of filtering, sorting, and formatting options. By default, it reports the running jobs in priority order and then the pending jobs in priority order.
+
+**''sbatch''** is used to submit a job script for later execution. The script will typically contain one or more srun commands to launch parallel tasks.
+
+**''srun''** is used to submit a job for execution or initiate job steps in real time. 
+
+**''salloc''** is used to allocate resources for a job in real time. Typically this is used to allocate resources and spawn a shell. The shell is then used to execute srun commands to launch parallel tasks.
+
+**''sattach''** is used to attach standard input, output, and error plus signal capabilities to a currently running job or job step. One can attach to and detach from jobs multiple times.
+
+**''scancel''** is used to cancel a pending or running job or job step. It can also be used to send an arbitrary signal to all processes associated with a running job or job step.
+
+**''sacct''** is used to report job or job step accounting information about active or completed jobs.
+
+
+===== Partitions =====
+
+SLURM partitions are group of nodes with same settings. Nodes can be in several partitions. RCI cluster has this partitions:
+
+^Partition  ^Nodes ^Time limit ^Max CPUs/node ^Max GPUs/node ^Max Mem/node ^Interactive ^Suspend ^Priority |
+|**cpufast** |n01-20,n33 |4 hours |46, 382 n33|0  |384GB, 1484GB n33 |yes |no |8 |
+|**gpufast** |n21-n32 |4 hours |70 |4 |384GB |yes |no  |8 | 
+|**cpu** |n01-20,n33 |24 hours |46, 382 n33|0 |384GB, 1484GB n33 |no |no  |4 |
+|**gpu** |n21-n32 |24 hours |70 |4 |384GB |no |no |4 | 
+|**smp** |n33 |24 hours |382 |0 |1484GB |no |no |8 |
+|**cpulong** |n01-n20 |72 hours |46 |0 |384GB |no |no |2 |
+|**gpulong** |n21-n32 |72 hours |70 |4 |384GB |no |no |2 |
+|**cpuextralong** |n01-n20 |1008 hours |46 |0 |384GB |no |yes |1 |
+|**gpuextralong** |n21-n32 |504 hours |70 |4 |384GB |no |no |1 |
+|**deadline** |n01-n20,n33 |24 hours |46, 382 n33|0 |384GB, 1484GB n33 |no |no |10 |
+|**gpudeadline** |n21-n32 |24 hours |70 |4 |384GB |no |no |10 |
+|**amdfast** |a01-a16 |4 hours |126 |0 |1024GB |yes |no |8 |
+|**amdgpufast** |g01-g12 |4 hours |124, 252 g11-12 |4, 8 g11-12 |1024GB |yes |no  |8 | 
+|**amd** |a01-a16 |24 hours |126 |0 |1024GB |no |no  |4 |
+|**amdgpu** |g01-g12 |24 hours |124, 252 g11-12 |4, 8 g11-12 |1024GB |no |no |4 | 
+|**amdlong** |a01-a16 |72 hours |126 |0 |1024GB |no |no |2 |
+|**amdgpulong** |g01-g12 |72 hours |124, 252 g11-12 |4, 8 g11-12 |1024GB |no |no |2 |
+|**amdextralong** |a01-a16 |1008 hours |126 |0 |1024GB |no |yes |1 |
+|**amdgpuextralong** |g01-g12 |504 hours |124, 252 g11-12 |4, 8 g11-12 |1024GB |no |no |1 |
+|**amddeadline** |a01-a16 |24 hours |126 |0 |1024GB |no |no |10 |
+|**amdgpudeadline** |g01-g12 |24 hours |124, 252 g11-12 |4, 8 g11-12 |1024GB |no |no |10 |
+|**h200fast** |h01-h03 |4 hours |124 |8|2304GB |yes |no  |8 | 
+|**h200** |h01-h03 |24 hours |124 |8 |2034GB |no |no |4 | 
+|**h200long** |h01-h03 |72 hours |124 |8 |2034GB |no |no |2 |
+|**h200extralong** |h01-h03 |504 hours |124 |8 |2034GB |no |no |1 |
+|**interactive** |dgx10 |72 hours |128 |4 |512GB | yes |no |10 |
+|**ipu** |ipu01 |24 hours |124 |0 |1024GB |yes |no |10 |
+If not specified, job will go to ''cpu'' partition. Jobs submitted to partitions with higher priority can overtake jobs submitted to lower priority partitions. E.g. if there are running jobs on node01 from ''cpuextralong'' partition and scheduler will decide to run new job from ''cpufast'' partition on the ''node01'' and there are not enough resources (CPU or memory) some job or jobs from ''cpuextralong'' partition will be preempted and resumed, when job from ''cpufast'' partition will finish or another resource will be freed. 
+
+Nodes are also weighted:  CPU nodes are with the lowest weight, SMP node with middle and GPU nodes with the highest weight. E.g. when job is submitted to the ''deadline'' partition, with no need of GPU or many CPUs, then will be started on the node with the lowest weight and enough resources.
+
+ Command **''sinfo''** will print basic information about them:
+<code>user@login1:~$ sinfo
+PARTITION       AVAIL  TIMELIMIT  NODES  STATE NODELIST 
+amdfast            up    4:00:00     16   idle a[01-16]
+amdgpufast         up    4:00:00     12   idle g[01-12]
+amd                up 1-00:00:00     16   idle a[01-16]
+amdgpu             up 1-00:00:00     12   idle g[01-12]
+amdlong            up 3-00:00:00     16   idle a[01-16]
+amdgpulong         up 3-00:00:00     12   idle g[01-12]
+amdextralong       up 42-00:00:0     16   idle a[01-16]
+amdgpuextralong    up 21-00:00:0     12   idle g[01-12]
+amddeadline        up 1-00:00:00     16   idle a[01-16]
+amdgpudeadline     up 1-00:00:00     11   idle g[01-12] 
+cpufast            up    4:00:00     21   idle n[01-20,33] 
+gpufast            up    4:00:00      1    mix n21 
+gpufast            up    4:00:00     11   idle n[22-32] 
+cpu*               up 1-00:00:00     21   idle n[01-20,33] 
+gpu                up 1-00:00:00      1    mix n21 
+gpu                up 1-00:00:00     11   idle n[22-32] 
+cpulong            up 3-00:00:00     20   idle n[01-20] 
+gpulong            up 3-00:00:00      1    mix n21 
+gpulong            up 3-00:00:00     11   idle n[22-32] 
+smp                up 1-00:00:00      1   idle n33 
+cpuextralong       up 42-00:00:0     20   idle n[01-20] 
+gpuextralong       up 21-00:00:0      1    mix n21 
+gpuextralong       up 21-00:00:0     11   idle n[22-32] 
+deadline           up 1-00:00:00      1    mix n21 
+deadline           up 1-00:00:00     32   idle n[01-20,22-33] 
+interactive        up 1-00:00:00      2   idle dgx[09-10]
+ipu                up 1-00:00:00      1   idle ipu01
+</code>
+
+List of all running jobs in queue will print command **''squeue''**
+<code>user@login1 ~]# squeue
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               163       gpu benchmar    user1  R       0:07      1 n21
+               162       cpu     bash    user2  R       1:31      1 n01
+</code>               
+
+Partition statistics is available with command **''showpartitions''**
+<code>user@login1 ~]# showpartitions
+Partition statistics for cluster rci at Čt zář  2 18:15:15 CEST 2021
+           Partition     #Nodes     #CPU_cores  Cores_pending   Job_Nodes MaxJobTime Cores Mem/Node
+           Name State Total  Idle  Total   Idle Resorc  Other   Min   Max  Day-hr:mn /node     (GB)
+        cpufast    up    21     0   1344    708      0      0     1 infin       4:00    48     384+
+        gpufast    up    12     1    864    560      0      0     1 infin       4:00    72     384 
+          cpu:*    up    21     0   1344    708      0    768     1 infin    1-00:00    48     384+
+            gpu    up    12     1    864    560      0      1     1 infin    1-00:00    72     384 
+        cpulong    up    20     0    960    328     20     16     1 infin    3-00:00    48     384 
+        gpulong    up    12     1    864    560      0      0     1 infin    3-00:00    72     384 
+            smp    up     1     0    384    380      0      0     1 infin    1-00:00   384    1484 
+   cpuextralong    up    20     0    960    328      0      0     1 infin   42-00:00    48     384 
+   gpuextralong    up    12     1    864    560      0      0     1 infin   21-00:00    72     384 
+       deadline    up    21     0   1344    708      0      0     1 infin    1-00:00    48     384+
+    gpudeadline    up    12     1    864    560      0      0     1 infin    1-00:00    72     384 
+        amdfast    up    16    16   2048   2048      0      0     1 infin       4:00   128    1031 
+     amdgpufast    up    12     9   1792   1502      0      0     1 infin       4:00   128    1031 
+            amd    up    16    16   2048   2048      0      0     1 infin    1-00:00   128    1031 
+         amdgpu    up    12     9   1792   1502      0      0     1 infin    1-00:00   128    1031 
+        amdlong    up    16    16   2048   2048      0      0     1 infin    3-00:00   128    1031 
+     amdgpulong    up    12     9   1792   1502      0      0     1 infin    3-00:00   128    1031 
+   amdextralong    up    16    16   2048   2048      0      0     1 infin   42-00:00   128    1031 
+amdgpuextralong    up    12     9   1792   1502      0      0     1 infin   21-00:00   128    1031 
+    amddeadline    up    16    16   2048   2048      0      0     1 infin    1-00:00   128    1031 
+ amdgpudeadline    up    12     9   1792   1502      0      0     1 infin    1-00:00   128    1031 
+</code>
+
+RCI cluster nodes and partition statistics is available with command **''rci_load''**
+<code>[user@login1 ~]# rci_load
+RCI cluster nodes and partition usage statistics 
+Node STATE     CPU_A CPU_T CPU_F  LOAD  MEM_A MEM_T MEM_F MEM_R GPU_A GPU_T GPU_F
+=================================================================================
+a01  idle         0   128   128     0.9     0  1008  1008  1000    0     0     0
+a02  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a03  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a04  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a05  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a06  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a07  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a08  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a09  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a10  idle         0   128   128     1.6     0  1008  1008  1001    0     0     0
+a11  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a12  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a13  idle         0   128   128     0.0     0  1008  1008   999    0     0     0
+a14  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a15  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+a16  idle         0   128   128     0.0     0  1008  1008  1000    0     0     0
+g01  mixed       34   128    94     2.5   363  1008   645   705    2     4     2
+g02  idle         0   128   128     0.1     0  1008  1008   977    0     4     4
+g03  idle         0   128   128     0.0     0  1008  1008   268    0     4     4
+g04  idle         0   128   128     0.1     0  1008  1008   278    0     4     4
+g05  idle         0   128   128     0.1     0  1008  1008   308    0     4     4
+g06  idle         0   128   128     0.1     0  1008  1008   296    0     4     4
+g07  idle         0   128   128     0.0     0  1008  1008   284    0     4     4
+g08  idle         0   128   128     0.1     0  1008  1008   290    0     4     4
+g09  idle         0   128   128     0.0     0  1008  1008   311    0     4     4
+g10  idle         0   128   128     0.0     0  1008  1008   243    0     4     4
+g11  mixed      128   256   128     3.0   512  1008   496   942    8     8     0
+g12  mixed      128   256   128     3.4   512  1008   496   981    8     8     0
+n01  allocated   48    48     0    14.5   375   375     0   125    0     0     0
+n02  mixed        8    48    40     3.9   184   375   191   363    0     0     0
+n03  mixed       18    48    30     5.9   300   375    75   342    0     0     0
+n04  mixed       12    48    36     5.9   274   375   101   362    0     0     0
+n05  allocated   48    48     0    17.0   375   375     0   165    0     0     0
+n06  mixed       22    48    26    10.1   308   375    67   358    0     0     0
+n07  mixed       14    48    34     6.0   330   375    45   327    0     0     0
+n08  allocated   48    48     0    15.1   375   375     0   235    0     0     0
+n09  mixed       16    48    32     8.0   334   375    41   356    0     0     0
+n10  mixed       12    48    36     6.0   294   375    81   361    0     0     0
+n11  mixed       14    48    34     7.0   324   375    51   358    0     0     0
+n12  allocated   48    48     0    10.8   375   375     0   106    0     0     0
+n13  allocated   48    48     0    20.1   375   375     0   162    0     0     0
+n14  allocated   48    48     0    13.2   375   375     0   200    0     0     0
+n15  mixed       22    48    26    11.7   248   375   127   352    0     0     0
+n16  allocated   48    48     0    12.9   375   375     0   159    0     0     0
+n17  allocated   48    48     0    18.9   375   375     0    89    0     0     0
+n18  mixed       14    48    34     8.8   100   375   275   360    0     0     0
+n19  allocated   48    48     0    12.7   375   375     0    98    0     0     0
+n20  allocated   48    48     0    14.5   375   375     0   146    0     0     0
+n21  mixed       16    72    56     2.0    60   375   315   345    4     4     0
+n22  mixed       42    72    30     2.3   192   375   183   293    3     4     1
+n23  mixed        2    72    70     1.0    40   375   335   332    1     4     3
+n24  idle         0    72    72     0.0     0   375   375   367    0     4     4
+n25  mixed       40    72    32     4.8   157   375   218   200    4     4     0
+n26  mixed       34    72    38     3.7   127   375   248   314    4     4     0
+n27  mixed       44    72    28     3.0   232   375   143    99    4     4     0
+n28  mixed       18    72    54     3.0   144   375   231   313    3     4     1
+n29  mixed       28    72    44     2.0   128   375   247   292    2     4     2
+n30  mixed       30    72    42     2.7   168   375   207   105    3     4     1
+n31  mixed       40    72    32     4.9   157   375   218   228    4     4     0
+n32  mixed       12    72    60     1.0    16   375   359   359    1     4     3
+n33  mixed        4   384   380     0.5   370  1450  1080  1174    0     0     0
+
+Node STATE     CPU_A CPU_T CPU_F  LOAD  MEM_A MEM_T MEM_F MEM_R GPU_A GPU_T GPU_F
+=================================================================================
+CPU_A,MEM_A,GPU_A     - Allocated CPUs,Memory and GPUs
+CPU_T,MEM_T,GPU_T     - Total available CPUs,Memory and GPUs
+CPU_F,MEM_F,GPU_F     - Free available CPUs,Memory and GPUs
+LOAD,MEM_R            - nodes real actual load and free memory
+
+Partition CPU_A  CPU_T  CPU_F  CPU_M  CPU_P MEM_A  MEM_T  MEM_F  MEM_M  MEM_P GPU_A GPU_T GPU_F GPU_M GPU_P JOBS_R JOBS_P
+=========================================================================================================================
+amd           0   2048   2048    128     0      0  16128  16128   1008      0    0     0     0     0      0      0      0
+amdextra      0   2048   2048    128     0      0  16128  16128   1008      0    0     0     0     0      0      0      0
+amdfast       0   2048   2048    128     0      0  16128  16128   1008      0    0     0     0     0      0      0      0
+amdgpu      290   1792   1502    128     0   1387  12096  10709   1008      0   18    56    38     4      0      3      0
+amdgpuex    290   1792   1502    128     0   1387  12096  10709   1008      0   18    56    38     4      0      0      0
+amdgpufa    290   1792   1502    128     0   1387  12096  10709   1008      0   18    56    38     4      0      0      0
+amdgpulo    290   1792   1502    128     0   1387  12096  10709   1008      0   18    56    38     4      0      0      0
+amdlong       0   2048   2048    128     0      0  16128  16128   1008      0    0     0     0     0      0      0      0
+cpu           0      0      0      0   768      0      0      0      0   6000    0     0     0     0      0     14     16
+cpuextra    632    960    328     40     0   6446   7500   1054    275      0    0     0     0     0      0      0      0
+cpufast       0      0      0      0     0      0      0      0      0      0    0     0     0     0      0      0      0
+cpulong     632    960    328     40    36   6446   7500   1054    275   3600    0     0     0     0      0     20      3
+gpu         306    864    558     72     1   1421   4500   3079    375     32   33    48    15     4      1      0      1
+gpuextra    306    864    558     72     0   1421   4500   3079    375      0   33    48    15     4      0      0      0
+gpufast     306    864    558     72     0   1421   4500   3079    375      0   33    48    15     4      0      2      0
+gpulong     306    864    558     72     0   1421   4500   3079    375      0   33    48    15     4      0     22      0
+smp           4    384    380    380     0    370   1450   1080   1080      0    0     0     0     0      0      0      0
+
+ CPU_A,MEM_A,GPU_A - Allocated CPUs,Memory and GPUs 
+ CPU_T,MEM_T,GPU_T - Total available CPUs,Memory and GPUs 
+ CPU_F,MEM_F,GPU_F - Free available CPUs,Memory and GPUs 
+ CPU_M,MEM_M,GPU_M - maximum available CPUs,MEM and GPUS on one node 
+ CPU_P,MEM_P,GPU_P - pending jobs required CPUs,Memory and GPUs 
+ JOBS_R,JOBS_P - running and pending jobs in the partition 
+
+</code>
+
+====== Limits ======
+
+To stop the overwhelm of a cluster with single-user tasks, we have applied user limits on the number of allocated CPUs and GPUs. Users from RCI and outside RCI have the limit set differently. The limits are different for each partition. The user’s QOS limits take precedence over  partition limits. If the user’s limit is undefined, partition’s limit will be used. If the user's neither partition’s limit is not defined, there is no limit on resources.
+ 
+A total of 3392 CPUs (1344 Intel, 2048 AMD)  in the cpu queues, 2656 CPUs ( 864 Intel, 1792 AMD) and 104 GPUs ( 48 V100 in Intel and 56 A100 in AMD) in the GPU queues.
+
+^Users/Partitions  ^maxJobs ^maxCPUs ^MaxMem ^MaxGPUs |
+|RCI members |1152 |850 | 7TB | 20 |
+|RCI collaborators |500 |750 | 7TB | 16 |
+|non-RCI users |100 |250 | 1TB | 6 |
+|fast partitions |undefined |undefined |undefined |32 |
+|amd,cpu,gpu partitions |400 |750 |7TB |20 |
+|long partitions |200 |750 |4TB |16 |
+|extralong partitions |150 |300 |1.5TB |6 |
+|deadline partitions |undefined |undefined |undefined |undefined |
+
+It means that RCI members can submit unlimited number of jobs and use max. 1152 CPUs and 32 GPUs in the *fast partitions. But  only 150 jobs or 300 CPUs and 1.5TB of memory and 6 GPUs in the extralong partitions. non-RCI users can run only 100 jobs, use only 250 CPUs, 1TB of memory and only 6 GPUs in any partition.
+
+
+
+
+
+===== Starting interactive job =====
+
+Interactive jobs are allowed only in the cpufast,gpufast,deadline and gpudeadline partitions,
+Basic command for job submission into queue is **''srun''** . 
+In the simplest example:
+<code>
+user@login2:~$ srun -p cpufast --pty bash -i
+hostname@n01:~$ hostname
+n01
+</code>
+the new bash will be started on the first free node from partition ''cpufast''.
+
+GPU cards have to be allocated by --gres=gpu:number_of cards, otherwise, job submited into gpu* partition will be rejected.
+<code>
+user@login1:~$ srun -p gpufast --pty bash -i
+srun: error: gpufast partition allows only GPU jobs
+srun: error: Unable to allocate resources: Unspecified error
+user@login1:~$ srun -p gpufast --pty --gres=gpu:4 bash -i
+user@n31:~$ nvidia-smi
+Mon Apr 15 12:13:24 2019
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 418.40.04    Driver Version: 418.40.04    CUDA Version: 10.1     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-SXM2...  Off  | 00000000:61:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   1  Tesla V100-SXM2...  Off  | 00000000:62:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   2  Tesla V100-SXM2...  Off  | 00000000:89:00.0 Off |                    0 |
+| N/A   28C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   3  Tesla V100-SXM2...  Off  | 00000000:8A:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      4%      Default |
++-------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
+</code>
+
+
+===== Noninteractive batch jobs =====
+
+It's possible to prepare batch script with multiple commnands.
+<code>
+user@login2:~$ cat simple.batch
+#!/bin/sh
+#SBATCH --partition=cpu
+#SBATCH --time=1
+/bin/hostname
+srun -l /bin/hostname
+srun -l /bin/pwd
+user@login2:~$ sbatch -n4 -w "n[03-04]" -o simple.stdout simple.batch
+Submitted batch job 230
+user@login2:~$ squeue
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+user@login2:~$ more simple.stdout
+n03
+0: n03
+1: n03
+3: n04
+2: n04
+0: /home/user
+1: /home/user
+2: /home/user
+3: /home/user
+</code>
+From output, we can view, that batch was started on n03 and then executed on n03 and n04 as requested by ''-w'' switch.
+
+=== sbatch parameters ===
+
+parameters can be specified on command line or in the batch script
+<code>
+#!/bin/bash
+
+#SBATCH --nodes=1                    # 1 node
+#SBATCH --ntasks-per-node=36         # 36 tasks per node
+#SBATCH --time=1:00:00               # time limits: 1 hour
+#SBATCH --error=myJob.err            # standard error file
+#SBATCH --output=myJob.out           # standard output file
+#SBATCH --partition=<partition_name> # partition name
+#SBATCH --mail-user=email_address    # where send info about job
+#SBATCH --mail-type=ALL              # what to send, valid type values are NONE, BEGIN, END, FAIL, REQUEUE, ALL 
+</code>
+
+==== Environment variables ====
+
+There are a number of environment variables provided to the SLURM job. Some of them are taken from the user's environment and carried with the job. Others are created by SLURM.
+
+All SLURM-provided environment variable names start with the characters SLURM_.
+
+Below are listed some of the more useful variables, and some typical values taken as an example:
+
+<code>
+SLURM_JOB_NAME=job
+SLURM_JOB_ID =453919
+SLURM_JOB_NODELIST=n01,n02,n[24-30]
+SLURM_SUBMIT_DIR=/home/username
+SLURM_SUBMIT_HOST=login1
+SLURM_CLUSTERNAME=rci
+SLURM_JOB_PARTITION=gpu
+</code>
+
+There are a number of ways that you can use these environment variables to make more efficient use of SLURM. For example SLURM_JOB_NAME can be used to retrieve the SLURM jobname. Another commonly used variable is SLURM_SUBMIT_DIR which contains the name of the directory from which the user submitted the SLURM job.
+
+Note: $SLURM_JOB_NODELIST will display the node names in contracted forms, meaning that for consecutive nodes you will get their range instead of the full list. You will see in square brackets the ID of the first and the last node of the chunk, meaning that all the nodes between them are also part of the actual node list. If list of nodes is needed use:
+<code>
+scontrol show hostnames ${SLURM_JOB_NODELIST}
+</code> 
+
+==== Serial job example ====
+
+For a typical serial job you can take the following script as a template, and modify it depending on your needs.
+
+The script asks for 10 hours wallclock time and runs a serial application (R). The input data are in file "data", the output file is "out.txt"; job.out will contain the std-out and std-err of the script. Data from home directory are copied to the very fast local scratch storage and job is started here. When finished scratch is removed.
+
+<code>
+#!/bin/bash
+#SBATCH --time=10:00:00
+#SBATCH --nodes=1 --ntasks-per-node=1 --cpus-per-task=1
+#SBATCH --mem=10G
+#SBATCH --out=job.out
+SCRATCH_DIR=/data/temporary/job_${SLURM_JOB_ID}
+mkdir ${SCRATCH_DIR}
+cp ~/my_data ${SCRATCH_DIR}/ 
+cd S{SCRATCH_DIR}
+module load R 
+R < data > ~/out.txt
+rm -rf ${SCRATCH_DIR}
+</code>
+
+==== MPI job example ====
+
+For a typical MPI job you can take one the following scripts as a template, and modify it depending on your needs.
+
+The script asks for 8 tasks, 4 nodes and 1 hour of wallclock time, and runs an MPI application (myprogram) compiled with the GCC 8.2 OpenMPI 3.1.3 library (in the [[installed_modules#foss|foss/2019a]] toolchain). The input data are in file "myinput", the output file is "myoutput", the working directory is where the job was submitted from. Through “–cpus-per-task=1” instruction each task will bind 1 physical cpu (core).  
+<code>
+#!/bin/bash
+#SBATCH --time=01:00:00
+
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=1
+
+#SBATCH --mem=18G
+#SBATCH --partition=cpu
+#SBATCH --job-name=jobMPI
+#SBATCH --err=myJob.err 
+#SBATCH --out=myJob.out 
+
+
+ml  foss/2021a
+srun --cpu-bind=cores --mpi=pmix myprogram < myinput > myoutput
+</code>
+
+
+===== Resource allocation =====
+
+For SLURM jobs, it's possible to allocate memory, CPUs or GPUs via job parameters.
+  * **''-n''** sets how many CPUs = threads should be allocated. Default is 1
+  * **''-N''** how many nodes should be used. Default is 1.
+  * **''--mem-per-cpu=''** sets how much memory per CPU should be allocated. Default value is 4GB per CPU.
+  * **''--mem=''**  sets how much memory for job should be allocated. Default is 4GB * number_of_CPUs_requested
+  * **''--gres=gpu ''** - how many GPUs should be allocated. Default is none.
+  * **''--exclusive''** - selected node will be whole allocated for job
+  * **''-t ''** - how many minutes will should be resource allocated.
+  
+==== Examples ====
+<code>
+user@login2:~$ salloc -n32 -p longjobs
+salloc: Granted job allocation 197
+user@login2:~$ squeue -j 197
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               197  longjobs     bash     user  R       0:09      1 n01
+user@login2:~$ scancel 197
+salloc: Job allocation 197 has been revoked.
+</code>
+32 CPUs = threads (there are 32 available on CPU nodes) have been allocated.
+
+<code>
+user@login2:~$ salloc -n32 --mem=500G -p longjobs
+salloc: Granted job allocation 198
+user@login2:~$ squeue -j 198
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               198  longjobs     bash     user  R       0:07      1 n33
+</code>
+Because 500GB memory request, job have been started on n33 (Nodes n01-32 have only 392GB memory, n33 have 1.5TB).
+
+<code>
+user@login2:~$ salloc -n32 --gres=gpu:4
+salloc: error: Job submit/allocate failed: Requested node configuration is not available
+salloc: Job allocation 201 has been revoked.
+</code>
+Request for 4 GPUs and 32 CPUs has not been successful, because there are no GPUs in default partition ''cpu''. Partition with GPUs have to be specified:
+<code>
+user@login2:~$ salloc -n32 -p longjobs --gres=gpu:4
+salloc: Granted job allocation 202
+user@login2:~$ squeue -j 202
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               202  longjobs     bash     user  R       0:10      1 n21
+</code>
+
+<code>
+salloc --exclusive -t 60
+salloc: Granted job allocation 203
+user@login2:~$ squeue -j 203
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               203       cpu     bash     user  R       0:14      1 n01
+</code>
+Whole node for 60 minutes has been allocated.
+
+===== Job arrays =====
+Job arrays offer a mechanism for submitting and managing collections of similar jobs quickly and easily; job arrays with millions of tasks can be submitted in milliseconds (subject to configured size limits). All jobs must have the same initial options (e.g. size, time limit, etc.).
+
+Job arrays are only supported for batch jobs and the array index values are specified using the **''--array''** or **''-a''** option of the sbatch command. The option argument can be specific array index values, a range of index values, and an optional step size as shown in the examples below. Note that the minimum index value is zero and the maximum value is a **1000**. Jobs which are part of a job array will have the environment variable ''SLURM_ARRAY_TASK_ID'' set to its array index value.
+<code>
+# Submit a job array with index values between 0 and 31
+$ sbatch --array=0-31    -N1 tmp
+
+# Submit a job array with index values of 1, 3, 5 and 7
+$ sbatch --array=1,3,5,7 -N1 tmp
+
+# Submit a job array with index values between 1 and 7
+# with a step size of 2 (i.e. 1, 3, 5 and 7)
+$ sbatch --array=1-7:2   -N1 tmp
+</code>
+
+A maximum number of simultaneously running tasks from the job array may be specified using a **''%''** separator. For example ''"--array=0-15%4"'' will limit the number of simultaneously running tasks from this job array to 4.
+
+[[https://slurm.schedmd.com/job_array.html|More information about job arrays]].

@@ -1,0 +1,12 @@
+====== RCI Cluster ======
+
+{{ :cluster_photo.png?nolink&400|}}[[http://rci.cvut.cz|RCI]] is the centre of scientific excellence in computer science and artificial intelligence that boosts and integrates internationally competitive research conducted at Czech Technical University. The goal of RCI is to foster collaboration between the experts in different fields of computer science, between fundamental scientists and application-driven researchers, but chiefly between the experienced, internationally recognised, senior scientists and graduate students, postdocs and young assistant professors. RCI is focused on longer term sustainability of excellence computer science and artificial intelligence.
+
+RCI Cluster is HPC (High Performance Computing) infrastracture intended for use mainly by RCI researchers.
+It consist from CPU, GPU and SMP nodes and datastorage interconnected by 100Gbit network with low latency. [[Hardware|More information about hardware]]. 
+
+Many software packages are available as modules or containers. There is list of installed software. It's possible to ask for instalation another SW i this form. [[software|More informattion about software]].
+
+Access to the cluster have all RCI researches. It's possible to ask for access to cluster for non-RCI members [[https://login.rci.cvut.cz/secure/request_form.php|filling this form]].
+
+RCI cluster supports grid computing now and there will be support for cloud computing in the near future. SLURM workload manager is used as job scheduler. [[jobs|More information about SLURM]].

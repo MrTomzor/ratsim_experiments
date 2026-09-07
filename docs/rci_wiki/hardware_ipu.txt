@@ -1,0 +1,148 @@
+====== Graphcore IPU support ======
+
+There is 1 node **ipu01** with attached 1 [[https://www.graphcore.ai/products/bow-2000|Graphcore Bow-2000 unit]] in our cluster. So there are 4 IPU processors available. The IPU node has very similiar hardware as AMD 4GPU nodes (g01-10), except GPUs: 64/128 Cores/Threads, 1TB RAM, 2TB NVMe local storage, InfiniBand HDR200 and 100GbE.
+
+Much more information about IPU processors are on [[https://www.graphcore.ai/bow-processors|Graphcore webpage]].
+
+The IPU node is fully integrated into the RCI cluster. Because 1 IPU unit with 4 IPU processors can be used exclusively only by 1 user, access to the IPU node is exclusive and only 1 user can work with all 4 IPU processors at one time. There is prepared partition **ipu** which allows interactive/batch jobs long in maximum 24 hours.
+
+===== Software support  =====
+
+All required software is available as software modules:
+  * **poplar_sdk** - drivers, utilities and basic SDK functions. [[https://docs.graphcore.ai/projects/poplar-user-guide/en/latest/index.html|Documentation]].
+  * **poplibs** - Poplar libs compiled from source to match corresponding toolchain (eg. foss-2021b )
+  * **popart** - Poplar Advance Runtime libraries compiled from source to match corresponding toolchain. [[https://docs.graphcore.ai/projects/popart-user-guide/en/latest/index.html|Documentation]].
+  * **PopTorch** - PyTorch for the IPU. [[https://docs.graphcore.ai/projects/poptorch-user-guide/en/latest/index.html|Documentation]].
+  *  **TensorFlow/2.5.2-foss-2020b-poplar_sdk-2.5.1** - TensorFlow 2.5.2 with added support for IPU. [[https://docs.graphcore.ai/projects/tensorflow-user-guide/en/latest/index.html|Documentation]].
+
+You should load just PopTorch or TensorFlow/2.5.2-foss-2020b-poplar_sdk-2.5.1 module and all required dependencies will be loaded automatically.
+
+poplar_sdk contains some usefell utilities like gc-monitor, which works similiar as nvidia-smi for NVIDIA GPUs.
+
+[[installed_modules_amd|All modules prepared for AMD nodes]] are also available on IPU node.
+
+===== Interactive work with IPU =====
+
+To get access on IPU node you have to ask for allocation **gres:ipu:1** in the partition **ipu**. You should also ask for all CPUs. 
+
+Because of the exclusive allocation of the IPU node, you should check, if the node is free, before submiting interactive job:
+<code>
+squeue -p ipu
+</code>
+
+If there isn't any job you can submit own:
+
+<code>
+user@login3:~$ srun -p ipu --gres=ipu:1 --cpus-per-task 128 --pty bash -i
+user@ipu01:~$ ml poplar_sdk
+user@ipu01:~$ gc-monitor
++---------------+--------------------------------------------------------------------------------+
+|  gc-monitor   |                Partition: p [active] has 4 reconfigurable IPUs                 |
++-------------+--------------------+--------+--------------+----------+------+----+------+-------+
+|    IPU-M    |       Serial       |IPU-M SW|Server version|  ICU FW  | Type | ID | IPU# |Routing|
++-------------+--------------------+--------+--------------+----------+------+----+------+-------+
+|10.44.44.130 | 0025.0002.8205221  |        |    1.9.0     |  2.4.4   |M2000 | 0  |  3   |  DNC  |
+|10.44.44.130 | 0025.0002.8205221  |        |    1.9.0     |  2.4.4   |M2000 | 1  |  2   |  DNC  |
+|10.44.44.130 | 0025.0001.8205221  |        |    1.9.0     |  2.4.4   |M2000 | 2  |  1   |  DNC  |
+|10.44.44.130 | 0025.0001.8205221  |        |    1.9.0     |  2.4.4   |M2000 | 3  |  0   |  DNC  |
++-------------+--------------------+--------+--------------+----------+------+----+------+-------+
++--------------------------------------------------------------------------------------------------+
+|                               No attached processes in partition p                               |
++--------------------------------------------------------------------------------------------------+
+</code>
+
+===== Batch IPU jobs =====
+
+You should always use ''#SBATCH --export=NONE'' directive in your IPU batch jobs, because the environment on the IPU node is different than on other nodes and environment variables from login nodes should not be exported to IPU node. 
+
+There is simple example of the batch job:
+
+<code>
+#!/bin/bash
+#SBATCH --partition ipu
+#SBATCH --nodes 1
+#SBATCH --ntasks-per-node 1
+#SBATCH --cpus-per-task 128
+#SBATCH --gres=ipu:1
+#SBATCH --job-name ipu_test
+#SBATCH --export=NONE
+
+ml poplar_sdk
+gc-monitor
+</code>
+
+===== Containers =====
+
+The Graphcore offers Docker images [[https://hub.docker.com/u/graphcore|here]]. The converted images into Singularity format can be found on ipu01 node in the folder: ''/data/singularity_images/'' .
+Available are:
+
+   * poplar_3.2.0.sif  - basic Poplar image
+   * poptorch_3.2.0.sif - PopTorch image
+   * poptorch_jupyter_3.2.0.sif - PopTorch with Jupyter Notebook
+   * pytorch_geometric_3.2.0.sif - PopTorch + PyTorch Geometric
+   * pytorch_geometric_jupyter_3.2.0.sif - PopTorch + PyTorch Geometric with Jupyter Notebook
+   * tensorflow_1.sif - TensorFlow 1.x with IPU support
+   * tensorflow_2+3.2.0.sif - TensorFlow 2.x with IPU support
+   * tensorflow_jupyter_3.2.0.sif - TensorFlow 2.x with Jupyter Notebook
+
+Using images with IPU support is same as standard [[containers|Singularity containers images]] (no extra flag is needed). 
+
+<code>
+eb@ipu01:~/poptorch/examples$ singularity exec /data/singularity_images/poptorch_3.2.0.sif python3 lstm.py
+Graph compilation: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 100/100 [00:03<00:00]
+tensor([[[-0.0829,  0.2030, -0.2392]],
+
+        [[-0.2602,  0.2466, -0.0009]],
+
+        [[-0.2861,  0.1742,  0.1390]],
+
+        [[-0.5033,  0.3053,  0.2416]],
+
+        [[-0.0797,  0.2083,  0.0092]]])
+(tensor([[[-0.0797,  0.2083,  0.0092]]]), tensor([[[-0.4064,  0.4112,  0.0333]]]))
+</code>
+
+===== Jupyter notebooks =====
+
+IPU can be used with Jupyter notebooks same way as with standard CPU/GPU jobs. Detailed instructions are here: [[jupyter|Jupyter notebooks]].
+
+Example of Jupyter batch jobs with PopTorch and IPU support
+<code>
+#!/bin/bash
+#SBATCH --partition ipu
+#SBATCH --nodes 1
+#SBATCH --ntasks-per-node 1
+#SBATCH --cpus-per-task 128
+#SBATCH --gres=ipu:1
+#SBATCH --export=NONE
+#SBATCH --job-name jupyter-notebook
+#SBATCH --output jupyter-notebook-%J.log
+
+# get tunneling info
+XDG_RUNTIME_DIR=""
+port=$(shuf -i8000-9999 -n1)
+node=$(hostname -s)
+user=$(whoami)
+
+ml PopTorch/2.5.0-foss-2021a
+ml IPython/7.25.0-GCCcore-10.3.0
+jupyter-notebook --no-browser --port=${port} --ip=${node}
+</code>
+
+
+The ml commands can be replaced by Singularity command to get running notebook inside container:
+<code>
+singularity exec /data/singularity_images/poptorch_jupyter_3.2.0.sif jupyter-notebook --no-browser --port=${port} --ip=${node}
+</code>
+
+===== Profiling and debugging =====
+
+There are several tools for profiling and debugging IPU accelerated code.
+
+PopVision is a suite of graphical application-analysis tools. You can download these from the [[https://www.graphcore.ai/developer/popvision-tools|PopVision tools web page]].
+
+[[https://docs.graphcore.ai/projects/graph-analyser-userguide/en/latest/|The PopVision Graph Analyser]] helps you get a deep understanding of how your applications are performing and utilising the IPU resources. It shows data about the graph program, memory use, and the time spent on code execution and communication.
+
+[[https://docs.graphcore.ai/projects/system-analyser-userguide/en/latest/index.html|The PopVision System Analyser]] provides information about the behaviour of the host-side application code. It shows an interactive graphical view of the timeline of execution steps, helping you to identify any bottlenecks between the host servers and IPUs.
+
+[[https://docs.graphcore.ai/projects/libpva/en/latest/index.html|The PopVision analysis library (libpva)]] can be used for programmatic analysis of Poplar profiling information.

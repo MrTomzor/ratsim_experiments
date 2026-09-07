@@ -1,0 +1,54 @@
+====== Changes in RCI cluster scheduler from July 2020 ======
+
+===== Partition changes =====
+lonjobs partition is changed to cpuextralong. cpufast,gpufast,cpulong,gpulong and gpuextralong partition are introduced.
+
+^Partition  ^Nodes ^Time limit ^Interactive ^Suspend ^Priority |
+|**cpufast** |n01-20,n33 |4 hours |yes |no |8 |
+|**gpufast** |n21-n32 |4 hours |yes |no  |8 | 
+|**cpu** |n01-20,n33 |24 hours |no |no  |4 |
+|**gpu** |n21-n32 |24 hours |no |no |4 | 
+|**smp** |n33 |24 hours |no |no |8 |
+|**cpulong** |n01-n20 |72 hours |no |no |2 |
+|**gpulong** |n21-n32 |72 hours |no |no |2 |
+|**cpuextralong** |n01-n20 |1008 hours |no |yes |1 |
+|**gpuextralong** |n21-n32 |504 hours |no |no |1 |
+|**deadline** |n01-n20,n33 |24 hours |yes |no |10 |
+|**gpudeadline** |n21-n32 |24 hours |yes |no |10 |
+
+Interactive jobs are allowed only in cpufast, gpufast and deadline partitions.
+Only jobs used at least 1 GPU are allowed in gpu* partitions.
+
+
+===== Limit changes =====
+To stop the overwhelm of a cluster with single-user tasks, we have applied user limits on the number of allocated CPUs and GPUs. Users from RCI and outside RCI have the limit set differently. The limits are different for each partition. The user’s QOS limits take precedence over  partition limits. If the user’s limit is undefined, partition’s limit will be used. If the user's neither partition’s limit is not defined, there is no limit on resources.
+ 
+A total of 1344 CPUs in the cpu queue, 864 CPUs and 48 GPUs in the GPU queue.
+
+^Users/Partitions  ^maxJobs ^maxCPUs ^MaxMem ^MaxGPUs |
+|RCI members |undefined |undefined |undefined |undefined |
+|RCI collaborators |250 |500 |2000GB |8 |
+|non-RCI users |100 |100 |400GB |4 |
+|fast partitions |undefined |undefined |undefined |32 |
+|cpu,gpu partitions |500 |1000 |6000GB |18 |
+|long partitions |250 |500 |2000GB |12 |
+|extralong partitions |150 |300 |1200GB |6 |
+|deadline partitions |undefined |undefined |undefined |undefined |
+
+It means that RCI members can submit unlimited number of jobs and use unlimited number of CPUs and 32 GPUs in the cpufast, gpufast partitions. But  only 150 jobs or 300 CPUs and 1200GB of memory and 6 GPUs in the extralong partitions. non-RCI users can run only 100 jobs, use only 100 CPUs, 400GB of memory and only 4 GPUs in any partition.
+
+===== Faishare and QOS changes =====
+
+
+There are 3 categories of the users with different QOS:
+  * RCI members - same as now QOS = 1000
+  * RCI collaborators - students or researchers who work with someone from RCI, QOS = 500
+  * non-RCI - same as now.  QOS = 10
+
+There is new [[https://login.rci.cvut.cz/secure/|RCI cluster user's profile page]] where every user can see own status and can change password. RCI members can add collaborators here.
+
+There is an associated SLURM account  for each RCI member (SLURM account is intended  for accounting of jobs and it’s different from a computer account - each user will get their own computer account) and each RCI collaborator will be associated to the SLURM account of their RCI coworker/supervisor. Non-RCI users will be associated to the SLURM account of their department. 
+Fairshare is be calculated per RCI member and not by RCI WP as before. 
+Fairshare is calculated according to usage of the cluster the last 7 days.
+SLURM accounts hierarchy:
+{{::rci_cluster_scheduler_improvements_1_.png|}}

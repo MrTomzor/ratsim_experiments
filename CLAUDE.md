@@ -64,7 +64,7 @@ All methods produce the same JSONL schema, one JSON object per episode:
 {"method": "ppo", "rundef": "...", "stage_idx": 0, "seed": 42, "episode_idx": 1, "steps": 300, "total_score": 15.0, "objects_found": 3, "collisions": 1, "termination_reason": "max_steps", "distance_traveled": 450.2, "wall_time_s": 12.3}
 ```
 
-- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. The `run_metadata` carries `exp_id`, `variation`, `method`, `seed`, `stage_idx`, `env_idx` so per-line filtering / grouping is trivial. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices. With `n_envs>1`, all parallel envs append to the same JSONL: each line carries an `env_idx` field so you can group/dedupe per-env, and `episode_idx` is per-env (i.e. unique within an `env_idx` but not globally).
+- **Training**: `results/<run_name>/train_episodes.jsonl` — written by the Gym env itself (see `ratsim_wildfire_gym_env/env.py`'s `episode_log_path` / `run_metadata` kwargs), so PPO and DreamerV3 produce identical schemas for free. The `run_metadata` carries `exp_id`, `variation`, `method`, `seed`, `stage_idx`, `env_idx` so per-line filtering / grouping is trivial. `episode_idx` is **cumulative across stages** — on env construction, the env counts existing JSONL lines and offsets from there, so resumed runs keep monotonically increasing indices. With `n_envs>1`, all parallel envs append to the same JSONL (flock-serialized so concurrent appends can't tear lines): each line carries an `env_idx` field so you can group per-env, and `episode_idx` is per-env — each env resumes from the highest `episode_idx` it previously wrote, so `(env_idx, episode_idx)` is unique and monotone. **Caveat for data written before 2026-09**: the offset used to count *all* envs' lines, so in old multi-env files every `episode_idx` value appears `n_envs` times and the values run ~`n_envs`× ahead of any single env's episode count — don't dedupe or count episodes by `episode_idx` there; and pre-flock files may contain a few torn lines, which the analysis loaders skip with a warning.
 - **Evaluation**: `results/<run_name>/eval_episodes.jsonl` — written by `test.py` via `make_episode_result()`.
 - **DONE marker**: `results/<run_name>/DONE` (empty file) is touched at the end of a successful run. `analyze_run_data.py` warns on any run dir missing it (run crashed or still in progress).
 
@@ -103,6 +103,18 @@ python analyze_run_data.py symlinks/comparison_A/
 ```
 
 Needs the sb3 venv (pandas + matplotlib): `~/ratvenv/venv/bin/python analyze_run_data.py ...`.
+
+**Training curves from a cluster experiment** — pull just the train data (no checkpoint
+payloads, no replay buffers; a few MB per experiment), then point `analyze_experiment.py`
+at the mirror:
+
+```bash
+./pull_run.sh <exp_id> -t          # → results/rci/<exp_id>/, rsync so re-pulls are cheap
+~/ratvenv/venv/bin/python analyze_experiment.py results/rci/<exp_id>
+```
+
+No `--run-eval` means it only reads the jsonls — no Unity, no venv subprocesses. PNGs land
+in `results/rci/<exp_id>/analysis/`.
 
 ### Experiment tracking (Weights & Biases)
 
@@ -246,6 +258,52 @@ Workflow for a paired comparison: run `--run-eval N` once for the baseline,
 then again with `--ablate-memory`. Both JSONLs persist; analyzer emits both
 the standard `eval_<metric>.png` and the comparison `eval_<metric>_ablation.png`.
 
+### Evaluating an adaptive-difficulty def at a fixed difficulty
+
+Defs with an `adaptive_difficulty:` block have no single world config: a scalar
+`d in [0, 1]` slides the declared `ranges:` keys between their `from` and `to`
+values, and the training walk leaves each run wherever its own competence
+frontier ended up. Evaluating "the def" therefore means picking a rung.
+
+Pass `--difficulty D` to interpolate the def's ranges once at `D` and merge the
+result over the resolved world config. No wrapper is attached, so `d` stays put
+for every eval episode — this measures one rung, not the walk. `D` is stamped
+into every eval JSONL record as `difficulty`.
+
+| Use case | Script | Flag |
+|---|---|---|
+| Quick check on one checkpoint | `test_dreamerv3.py` | `difficulty=0.7` |
+| One scheduler run (SB3) | `eval_one_run.py` | `--difficulty 0.7` |
+| One scheduler run (dreamer) | `eval_one_run_dreamer.py` | `--difficulty 0.7` |
+| All runs in an experiment | `analyze_experiment.py --run-eval N` | `--difficulty 0.7` |
+| Human playtest | `human_control_test_adaptive.py` | `difficulty=0.7` |
+
+```bash
+# One run, hardest world the ladder reaches.
+python eval_one_run_dreamer.py --run_dir results/experiments/<exp>/runs/<run> \
+    --exp_dir results/experiments/<exp> --n_episodes 10 --difficulty 1.0
+
+# Whole experiment at one rung — every run compared on the same worlds
+# (same rung AND same eval_metaseed world sequence).
+python analyze_experiment.py ortho_wells_adaptive --run-eval 10 --difficulty 0.5
+```
+
+Without `--difficulty` nothing changes: the eval uses the def's base world
+config, exactly as before. Omitting it on an adaptive def is legal but means
+evaluating at the un-interpolated base world, which is generally *not* the
+world the agent last trained on.
+
+Caveats:
+- Requires an `adaptive_difficulty:` block; on a def without one the eval
+  scripts exit with an error rather than silently ignoring the flag.
+- `--difficulty` overwrites the same `eval_episodes.jsonl` (or
+  `eval_episodes_ablated.jsonl` with `--ablate-memory`), so a second eval at a
+  different `D` replaces the first. For a sweep, copy the JSONL between runs —
+  each record carries the `difficulty` that produced it.
+- Without `--run-eval`, `--difficulty` on `analyze_experiment.py` does nothing
+  (it changes which worlds an eval runs on, not how cached results are plotted)
+  and warns.
+
 ### Human evaluation
 
 Human control is handled via `/enable_human_control` topic sent to Unity. The core function `ratsim.human_control_test.run_human_session()` manages the sim loop — Python ticks the sim, Unity handles human input, TaskTracker records metrics. test.py imports this for human eval runs.
@@ -262,6 +320,8 @@ ratsim_experiments/
 │                            #   eval bar charts + memory-ablation plot
 ├── eval_one_run.py          # Per-run eval helper for SB3 (PPO / RecurrentPPO)
 ├── eval_one_run_dreamer.py  # Per-run eval helper for DreamerV3 (embodied venv)
+├── pull_run.sh              # Pull an experiment from the RCI cluster (-t train
+│                            #   data only / latest ckpt / -a all ckpts / -A everything)
 ├── overnight_batch.sh       # Example bash queue for long unattended runs
 ├── experiment_defs.py       # Schema + loader for defs/*.yaml (shared by train + scheduler)
 ├── defs/                    # Experiment definitions (YAML)

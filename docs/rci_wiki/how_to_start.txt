@@ -1,0 +1,256 @@
+====== How to start to work on RCI cluster ======
+
+There are information mainly for new users  and also links to follow-up parts of the documentation.
+===== Account =====
+
+RCI Account is required for access to RCI cluster. This account is automaticaly created for all researches working on RCI project. Non RCI researchers can obtain access to RCI cluster for one year by [[https://login.rci.cvut.cz/secure/request_form.php|filling registration form]]. 
+
+===== Password =====
+ 
+First time users have to set password for RCI account on [[https://login.rci.cvut.cz/secure/|user's profile page]] (working CTU ID is required for it).  **RCI account username is same as CTU username.**
+
+===== Access =====
+
+The SSH client is required to connect RCI cluster. For interactive work with GUI applications, X11 server is required. SSH client is almost in all Linux or Mac OS X distributions. You can use [[https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html|PuTTy]] SSH client in Windows.  X11 server is part of all Linux distributions. Use [[https://www.xquartz.org/|XQuartz]] for Mac OS X. Use [[https://mobaxterm.mobatek.net/|MobaXterm]] in Windows - which includes also SSH client, so PuTTy is nod needed, when using MobaXterm.
+
+Addresses of the access nodes are: **login[1-4].rci.cvut.cz**. You need to login on login1.rci.cvut.cz first to setup SSH keys. Access with SSH pasword is not enabled on the nodes login[2-4].rci.cvut.cz
+So in Linux and Mac OS X run from terminal:
+
+<code>ssh username@login1.rci.cvut.cz</code> 
+for command line access or 
+<code>ssh -X username@login1.rci.cvut.cz</code> for X11 forwarding.
+MobaXterm automaticaly uses X11 forwarding when connecting to SSH host.
+
+**Use your RCI cluster password.**
+
+**It's recommended to use [[https://wiki.archlinux.org/title/SSH_keys|SSH keys]] instead. Login with a password is allowed only on login1.**
+
+===== Storage =====
+
+Every RCI cluster user has home and private data /mnt/personal/username directory available on all nodes of the cluster. Home directory is also available via SMB protocol on the address:
+<code>\\147.32.87.117\home\%username</code>
+Personal data directory is available via SMB on the address:
+<code>\\login3.rci.cvut.cz\personal\%username</code>
+Note: username for SMB access is plain CTU username (not username@cvut.cz).
+
+**Don't use home directory for storing data. Always use /mnt/personal which is faster and bigger.**
+
+You can use SCP client to copy your data here. Or you can use sshfs user space comman on the access node to mount directory from external server via SSH protocol:
+<code>user@login1:~$ mkdir ~/external_data
+user@login1:~$ sshfs username@ptak.felk.cvut.cz:/datagrid/ external_data/
+</code>
+Note: data from external servers mounted via SSHFS are available only on access node and should by copied to cluster home to get access from compute nodes.
+
+For data shared between group of users is available datastore ''/mnt/data/'' (also available on all nodes) . Ask [[mailto:cluster_admin@rci.cvut.cz|cluster administrators]] to create folder for your group. 
+Data directory is available via SMB on the address:
+<code>\\login3.rci.cvut.cz\data</code>
+
+On computate nodes is available very fast local scratch folder /data/temporary/ for single node jobs or /mnt/job-%job_id for multi node jobs. Those folders are visible only on used nodes and are removed when job finished, so user have to copy required data to his home before jobs finished.
+
+[[storage|More information about storage is here]]. 
+
+===== Job submission =====
+
+Compute nodes are available only from access node and only via SLURM (used job sheduler software) commands. **There is no direct SSH access to the compute nodes possible.** 
+
+There are several job queues, partitions in SLURM terminology, available. Command **''sinfo''** will print basic information about them:
+<code>user@login1:~$ sinfo
+PARTITION       AVAIL  TIMELIMIT  NODES  STATE NODELIST 
+amdfast            up    4:00:00     16   idle a[01-16]
+amdgpufast         up    4:00:00     12   idle g[01-12]
+amd                up 1-00:00:00     16   idle a[01-16]
+amdgpu             up 1-00:00:00     12   idle g[01-12]
+amdlong            up 3-00:00:00     16   idle a[01-16]
+amdgpulong         up 3-00:00:00     12   idle g[01-12]
+amdextralong       up 42-00:00:0     16   idle a[01-16]
+amdgpuextralong    up 21-00:00:0     12   idle g[01-12]
+amddeadline        up 1-00:00:00     16   idle a[01-16]
+amdgpudeadline     up 1-00:00:00     11   idle g[01-12] 
+cpufast            up    4:00:00     21   idle n[01-20,33] 
+gpufast            up    4:00:00      1    mix n21 
+gpufast            up    4:00:00     11   idle n[22-32] 
+cpu*               up 1-00:00:00     21   idle n[01-20,33] 
+gpu                up 1-00:00:00      1    mix n21 
+gpu                up 1-00:00:00     11   idle n[22-32] 
+cpulong            up 3-00:00:00     20   idle n[01-20] 
+gpulong            up 3-00:00:00      1    mix n21 
+gpulong            up 3-00:00:00     11   idle n[22-32] 
+smp                up 1-00:00:00      1   idle n33 
+cpuextralong       up 42-00:00:0     20   idle n[01-20] 
+gpuextralong       up 21-00:00:0      1    mix n21 
+gpuextralong       up 21-00:00:0     11   idle n[22-32] 
+deadline           up 1-00:00:00      1    mix n21 
+deadline           up 1-00:00:00     32   idle n[01-20,22-33] 
+</code>
+
+List of all running jobs in queue will print command **''squeue''**
+<code>user@login1 ~]# squeue
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               163       gpu benchmar    user1  R       0:07      1 n21
+               162       cpu     bash    user2  R       1:31      1 n01
+</code>               
+
+==== Starting interactive job ====
+
+**Interactive jobs are allowed only in cpufast,gpufast,amdfast,amdgpufast partitions.**
+Basic command for job submission into queue is **''srun''** . 
+In the simplest example:
+<code>
+user@login2:~$ srun -p gpufast--gres=gpu:2  --pty bash -i
+hostname@n21:~$ hostname
+n21
+</code>
+the new bash will be started on the first free node from partition ''gpufast''.
+
+Another option, how to start interactive shell is by command **''salloc''** which will allocate node.
+<code>
+user@login1:~$ salloc -p cpufast -t 30
+salloc: Granted job allocation 177
+user@login1:~$ squeue -j 177
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+               177       cpufast     bash     user  R       4:05      1 n11
+user@login1:~$ ssh -X n11
+user@n11:~$ xterm
+</code>
+''salloc'' has allocated one node from ''cpufast'' partition for 30 minutes. ''squeue'' returned on which node and than ssh to this node is allowed (without allocation , ssh node is not possible). -X means ssh with X11 forwarding, so staring X11 applications is possible. 
+
+GPU cards have to be allocated by --gres=gpu:number_of cards, otherwise, no GPU will be accessible on node.
+**Don't use salloc/ssh method for GPU nodes (gpufast partition), please. **
+
+<code>
+user@login1:~$ srun -p gpufast --pty bash -i
+srun: error: gpufast partition allows only GPU jobs
+srun: error: Unable to allocate resources: Unspecified error
+user@login1:~$ srun -p gpufast --pty --gres=gpu:4 bash -i
+user@n31:~$ nvidia-smi
+Mon Apr 15 12:13:24 2019
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 418.40.04    Driver Version: 418.40.04    CUDA Version: 10.1     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-SXM2...  Off  | 00000000:61:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   1  Tesla V100-SXM2...  Off  | 00000000:62:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   2  Tesla V100-SXM2...  Off  | 00000000:89:00.0 Off |                    0 |
+| N/A   28C    P0    57W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   3  Tesla V100-SXM2...  Off  | 00000000:8A:00.0 Off |                    0 |
+| N/A   29C    P0    57W / 300W |      0MiB / 32480MiB |      4%      Default |
++-------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
+</code>
+
+
+
+==== Noninteractive batch job ====
+
+It's possible to prepare batch script with multiple srun commnand.
+<code>
+user@login2:~$ cat simple.batch
+#!/bin/sh
+#SBATCH --time=1
+/bin/hostname
+srun -l /bin/hostname
+srun -l /bin/pwd
+user@login2:~$ sbatch -n4 -w "n[03-04]" -o simple.stdout simple.batch
+Submitted batch job 230
+user@login2:~$ squeue
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+user@login2:~$ more simple.stdout
+n03
+0: n03
+1: n03
+3: n04
+2: n04
+0: /home/user
+1: /home/user
+2: /home/user
+3: /home/user
+</code>
+From output, we can view, that batch was started on n03 and then executed on n03 and n04 as requested by ''-w'' switch.
+
+==== Canceling allocation ====
+
+When allocation is not needed anymore, can be canceled by:
+<code>
+user@login2:~$ salloc -N2 -p gpu --gres=gpu:1
+salloc: Granted job allocation 219
+user@login2:~$ scancel 219
+salloc: Job allocation 219 has been revoked.
+user@login2:~$ exit
+exit
+</code>
+
+
+
+[[jobs|More information about job schedulling]].
+
+===== Software =====
+
+Only basic run-time environment is available on the nodes. All other software is available as modules or containers or both. 
+
+<code>
+user@login1:~$ srun -p gpufast --gres=gpu:1 --mpi=none --pty bash -i
+user@n21:~$ ml TensorFlow/1.13.1-fosscuda-2018b-Python-3.6.6
+user@n21:~$ python
+Python 3.6.6 (default, Mar 31 2019, 10:09:45)
+[GCC 7.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import tensorflow as tf
+>>>
+</code>
+TensorFlow module has been loaded and used in Python. 
+
+Every required module have to be loaded in your SLURM scipt before using a software.  [[modules|More info about modules]]. [[installed_modules|List of all available modules]].
+
+Another option is to use Singularity containers.
+
+<code>
+user@login1:~$ srun -p gpufast --gres=gpu:1 --mpi=none --pty bash -i
+user@n21:~$ singularity run /mnt/appl/singularity_images/tensorflow-19.03-py3.simg
+================
+== TensorFlow ==
+================
+
+NVIDIA Release 19.03 (build 5809531)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright 2017 The TensorFlow Authors.  All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use 'singularity run --nv container_name ' to start this container
+user@n21:~$ exit
+exit
+user@n21:~$ singularity run --nv /mnt/appl/singularity_images/tensorflow-19.03-py3.simg
+================
+== TensorFlow ==
+================
+
+NVIDIA Release 19.03 (build 5809531)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright 2017 The TensorFlow Authors.  All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+user@n21:~$ python
+Python 3.5.2 (default, Nov 12 2018, 13:43:14)
+[GCC 5.4.0 20160609] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import tensorflow as tf
+>>>
+</code>
+**''--nv''** singularity switch have to be used when working with GPU cards. [[containers|More information about containers]]. [[installed_containers|List of prepared singularity images]].

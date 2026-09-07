@@ -1,0 +1,159 @@
+====== Running software containers on RCI cluster ======
+
+===== What is a software container and what’s it good for? =====
+
+A container allows you to stick an application and all of its dependencies into a single package. This makes your application portable, shareable, and reproducible.
+Containers foster portability and reproducibility because they package ALL of an applications dependencies… including its own tiny operating system!
+This means your application won’t break when you port it to a new environment. Your app brings its environment with it.
+
+[[https://www.docker.com/|Docker]] is currently the most widely used container software. It has several strengths and weaknesses that make it a good choice for some projects but not for others. Docker is good for single user environment, but not for HPC environment.  
+
+[[http://singularity.lbl.gov/|Singularity]] Singularity is a relatively new container software originally developed by Greg Kurtzer while at Lawrence Berkley National labs. It was developed with security, scientific software, and HPC systems in mind.
+
+**You can use Singularity to run Docker or Singularity containers on all nodes of RCI cluster.** 
+
+===== Security =====
+  * Every user can run Docker or Singularity container.  Only system administrators can build/create containers. But every user with an access to Linux system, where can use sudo command, is able to build/create container here and then run it on grid.
+  * The user remains the same inside and outside of the container. So with Singularity, user cannot get root access inside the container. 
+  * User has access to same filesystems inside and outside of the container. So users can read and writing data from/to /mnt/data or /home easily inside container. 
+
+===== Usage =====
+
+For creating own singularity containers see [[https://singularity-tutorial.github.io/|this tutorial]].
+
+==== Running docker container from Docker hub ====
+<code>
+singularity run docker://godlovedc/lolcow
+Docker image path: index.docker.io/godlovedc/lolcow:latest
+Cache folder set to /home/eb/.singularity/docker
+[6/6] |===================================| 100.0%
+Creating container runtime...
+
+ ________________________________________
+/ You've been leading a dog's life. Stay \
+\ off the furniture.                     /
+ ----------------------------------------
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+</code>
+This command will download container godlovedc/lolcow from [[https://hub.docker.com/|Docker hub]], where thousands of containers are available, convert it to the Singularity format and will run default container command (cowsay in this example).
+Docker containers are stored in cache: ~/.singularity/docker . 
+
+==== Using prepared Singularity container ====
+
+=== Shell ===
+singularity shell container will start shell inside the container
+<code>
+singularity shell lolcow.simg
+Singularity: Invoking an interactive shell within container...
+Singularity lolcow.simg:/local/temporary>whoami
+vecerka
+Singularity lolcow.simg:/tmp> cowsay "Buuuuuuuuuuu"
+ ______________
+< Buuuuuuuuuuu >
+ --------------
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+Singularity lolcow.simg:/tmp> exit
+exit
+</code>
+
+=== Execute program in container===
+It's possible to directly call command inside container from host computer
+<code>
+singularity exec lolcow.simg cowsay "Buuuuuuuuuuu"
+ ______________
+< Buuuuuuuuuuu >
+ --------------
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+</code>
+
+=== Run default program in container ===
+If there is defined default program in container it's possible to call it:
+<code>
+singularity run lolcow.simg
+Please provide an input and an output file.
+</code>
+
+or directly run singularity image as executable"
+<code>
+echo "Buuuuuuuuuuu" > input
+./lolcow.simg input output
+cat output
+ ______________
+< Buuuuuuuuuuu >
+ --------------
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+</code>
+So it's very simple to integrate containerized commands into your workflow.
+
+=== GPU support ===
+ Singularity has integrated NVIDIA GPUs support, so you can use commands requires GPU inside container. Use ''--nv'' switch for run, exec or shell commands.
+ <code>
+eb@login2:~$ srun -p gpu --gres=gpu:4 --pty bash -i
+eb@n21:~$ singularity run --nv /mnt/appl/singularity_images/caffe-18.11-py2.simg
+==================
+== NVIDIA Caffe ==
+==================
+
+NVIDIA Release 18.11 (build 822808)
+
+Container image Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+Copyright (c) 2014, 2015, The Regents of the University of California (Regents)
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION.  All rights reserved.
+NVIDIA modifications are covered by the license terms that apply to the underlying project or file.
+
+eb@n21:~$ nvidia-smi
+Fri Apr 12 19:13:57 2019
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 418.40.04    Driver Version: 418.40.04    CUDA Version: 10.1     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-SXM2...  Off  | 00000000:61:00.0 Off |                    0 |
+| N/A   46C    P0    58W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   1  Tesla V100-SXM2...  Off  | 00000000:62:00.0 Off |                    0 |
+| N/A   44C    P0    60W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   2  Tesla V100-SXM2...  Off  | 00000000:89:00.0 Off |                    0 |
+| N/A   47C    P0    61W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   3  Tesla V100-SXM2...  Off  | 00000000:8A:00.0 Off |                    0 |
+| N/A   45C    P0    58W / 300W |      0MiB / 32480MiB |      4%      Default |
++-------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
++-----------------------------------------------------------------------------+
+
+ </code>
+
+==== Prepared Singularity containers ====
+
+ There are some prepared singularity containers in the folder: **/mnt/appl/singularity_images/**.
+[[installed_containers|More information about prepared images]].

@@ -1,0 +1,28 @@
+====== Acknowledgement to RCI project ======
+
+===== RCI members =====
+
+All RCI member should add acknowledgement to RCI project to all papers: 
+
+**The authors acknowledge the support of the OP VVV funded project 
+CZ.02.1.01/0.0/0.0/16_019/0000765 "//Research Center for Informatics//"**. 
+
+==== LaTeX ====
+<code>
+The authors acknowledge the support of the OP VVV funded project 
+CZ.02.1.01/0.0/0.0/16\_019/0000765 ``Research Center for Informatics''. 
+</code>
+
+
+===== RCI collabolators and other user of RCI cluster =====
+
+
+All RCI cluster users should add acknowledgement to RCI project to papers, where RCI cluster helped:
+
+
+**The access to the computational infrastructure of the OP VVV funded project CZ.02.1.01/0.0/0.0/16_019/0000765 "//Research Center for Informatics//" is also gratefully acknowledged.
+**
+==== LaTeX ====
+<code>
+The access to the computational infrastructure of the OP VVV funded project CZ.02.1.01/0.0/0.0/16\_019/0000765 ``Research Center for Informatics'' is also gratefully acknowledged.
+</code>

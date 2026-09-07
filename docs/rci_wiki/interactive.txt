@@ -1,0 +1,17 @@
+====== Web interactive applications ======
+
+
+For interactive work is available the interface on the address https://login2.rci.cvut.cz/ . Every user from CTU can login on this server, but RCI cluster users can work on the cluster.
+There are prepared 4 interactive applications: Jupyter Notebook, VS Code server, MATLAB, IvokeAI and TensorBoard.
+{{:gpu01.png|}}
+
+
+All applications could be configure: how long should job last, how many CPU cores and GPUs should be used,  and which version of the software should be used.
+{{:gpu02.png|}}
+
+When launched, there is a small delay – 5-10 seconds, until the application is prepared and it is ready to run.
+
+{{:gpu03.png|}}
+When ready, after clicking on the button **Connect to ..**, the application will start in a new browser tab/window.
+
+{{:gpu04.png|}}

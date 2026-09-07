@@ -1,0 +1,374 @@
+====== Using Matlab on RCI cluster ======
+
+This page is intended to help you with running parallel MATLAB codes on the RCI cluster. The latest software modules supporting parallel computing with MATLAB available on the cluster are:
+  * MATLAB/9.7 - R2019b
+  * MATLAB/9.10 - R2021a
+  * MATLAB/9.12 - R2022a
+
+If not specified the latest available version is used. Parallel processing with MATLAB is performed with the help of two products, [[https://www.mathworks.com/products/parallel-computing.html|Parallel Computing Toolbox (PCT)]] and [[https://www.mathworks.com/products/matlab-parallel-server.html|MATLAB Parallel Server (MPS)]].
+
+
+====== Parallel Computing Toolbox ======
+
+PCT provides up to as much workers as CPUs are available on a node (MATLAB computational engines) to execute applications locally on a node. This means that with the toolbox one could run parallel MATLAB codes locally on the compute nodes and use up to 384 threads (node n33).
+
+===== Parallel FOR loops (parfor) =====
+
+Below is a simple code illustrating the use of PCT to calculate PI via a parallel Monte-Carlo method. This example also illustrates the use of parfor (parallel FOR) loops. In this scheme, suitable FOR loops could be simply replaced by parallel FOR loops without other changes to the code:
+<code>
+%============================================================================
+% Parallel Monte Carlo calculation of PI
+%============================================================================
+workers=str2num(getenv('SLURM_CPUS_PER_TASK'))/2;
+parpool('local',workers)
+R = 1;
+darts = 1e7;
+count = 0;
+tic
+parfor i = 1:darts
+   % Compute the X and Y coordinates of where the dart hit the...............
+   % square using Uniform distribution.......................................
+   x = R*rand(1);
+   y = R*rand(1);
+   if x^2 + y^2 <= R^2
+      % Increment the count of darts that fell inside of the.................
+      % circle...............................................................
+     count = count + 1; % Count is a reduction variable.
+   end
+end
+% Compute pi.................................................................
+myPI = 4*count/darts;
+T = toc;
+fprintf('The computed value of pi is %8.7f.\n',myPI);
+fprintf('The parallel Monte-Carlo method is executed in %8.2f seconds.\n', T);
+delete(gcp);
+exit;
+</code>
+**Important: When using parpool in MATLAB, you need include the statement ''parpool('local', number_of_workers)'' in your code. number_of_workers should be half of allocated SLURM CPUs: ''workers=str2num(getenv('SLURM_CPUS_PER_TASK'))/2;'' **.
+MATLAB works with cores (you should not run more workers than physical cores are available), but SLURM works with threads ( we are using CPU hyperthreading, 1 core = 2 threads = 2 SLURM CPUs).  
+ ''parpool('local',workers)''  statement tells MATLAB to start SLURM_CPUS_PER_TASK/2 workers on the local machine (the compute node where your job lands). When the parallel computation is done, the MATLAB workers are released with the statement delete(gcp). If the above code is named, e.g., pfor.m, it can be sent to the queue with the below batch-job submission script. It starts a MATLAB parallel job with 8 workers (but 16 CPUs are allocated) :
+
+<code>
+#!/bin/bash
+#SBATCH --job-name=pfor
+#SBATCH --output=pfor.out
+#SBATCH --error=pfor.err
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=0-00:30
+#SBATCH --partition=cpu
+#SBATCH --mem=32G
+module load MATLAB
+srun --cpus-per-task=$SLURM_CPUS_PER_TASK matlab -nosplash -nodesktop -r "pfor"
+</code>
+
+If the submission srcipt is called pfor.batch, it is submitted to the queue (partition) by typing in:
+<code>
+user@login1:~/matlab$ sbatch pfor.batch
+Submitted batch job 1258851
+user@login1:~/matlab$ squeue -j 1258851
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           1258851       cpu     pfor  user  R       0:17      1 n10
+</code>
+As you can see, job have started on the node n10. When the job has completed the pfor.out output file is generated.
+<code>
+                            < M A T L A B (R) >
+                  Copyright 1984-2019 The MathWorks, Inc.
+                  R2019b (9.7.0.1190202) 64-bit (glnxa64)
+                              August 21, 2019
+
+
+To get started, type doc.
+For product information, visit www.mathworks.com.
+
+Starting parallel pool (parpool) using the 'local' profile ...
+Connected to the parallel pool (number of workers: 8).
+
+ans =
+
+ Pool with properties:
+
+            Connected: true
+           NumWorkers: 8
+              Cluster: local
+        AttachedFiles: {}
+    AutoAddClientPath: true
+          IdleTimeout: 30 minutes (30 minutes remaining)
+          SpmdEnabled: true
+
+The computed value of pi is 3.1408256.
+The parallel Monte-Carlo method is executed in     1.62 seconds.
+Parallel pool using the 'local' profile is shutting down.
+Any runtime errors would go to the file pfor.err.
+</code> 
+===== Single Program Multiple Data (SPMD) =====
+In addition, MATLAB also provides a **single program multiple data (SPMD)** parallel programming model, which allows for a greater control over the parallelization -- tasks could be distributed and assigned to parallel processes ( labs or workers in MATLAB's terminology ) depending on their ranks. The below code provides a simple illustration -- it prints out the worker rank from each MATLAB lab:
+<code>
+%====================================================================
+% Illustration of SPMD Parallel Programming model with MATLAB
+%====================================================================
+workers=str2num(getenv('SLURM_CPUS_PER_TASK'))/2;
+parpool('local',workers)
+% Start of parallel region...........................................
+spmd
+  nproc = numlabs;  % get total number of workers
+  iproc = labindex; % get lab ID
+  if ( iproc == 1 )
+     fprintf ( 1, ' Running with  %d labs.\n', nproc );
+  end
+  for i = 1: nproc
+     if iproc == i
+        fprintf ( 1, ' Rank %d out of  %d.\n', iproc, nproc );
+     end
+  end
+% End of parallel region.............................................
+end
+delete(gcp);
+exit;
+</code>
+If the code is named **''spmd.m''**, it could be sent to the queue with this script:
+<code>
+#!/bin/bash
+#SBATCH --job-name=smpd
+#SBATCH --output=smpd.out
+#SBATCH --error=smpd.err
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=0-00:30
+#SBATCH --partition=cpu
+#SBATCH --mem=32G
+module load MATLAB
+srun --cpus-per-task=$SLURM_CPUS_PER_TASK matlab -nosplash -nodesktop -r "smpd"
+</code>
+When submited and completed, there should be in the output **''spmd.out''**:
+<code>
+
+                            < M A T L A B (R) >
+                  Copyright 1984-2019 The MathWorks, Inc.
+                  R2019b (9.7.0.1190202) 64-bit (glnxa64)
+                              August 21, 2019
+
+
+To get started, type doc.
+For product information, visit www.mathworks.com.
+
+Starting parallel pool (parpool) using the 'local' profile ...
+Connected to the parallel pool (number of workers: 8).
+
+ans =
+
+ Pool with properties:
+
+            Connected: true
+           NumWorkers: 8
+              Cluster: local
+        AttachedFiles: {}
+    AutoAddClientPath: true
+          IdleTimeout: 30 minutes (30 minutes remaining)
+          SpmdEnabled: true
+
+Lab 1:
+   Running with  8 labs.
+   Rank 1 out of  8.
+Lab 2:
+   Rank 2 out of  8.
+Lab 3:
+   Rank 3 out of  8.
+Lab 4:
+   Rank 4 out of  8.
+Lab 5:
+   Rank 5 out of  8.
+Lab 6:
+   Rank 6 out of  8.
+Lab 7:
+   Rank 7 out of  8.
+Lab 8:
+   Rank 8 out of  8.
+Parallel pool using the 'local' profile is shutting down.
+</code>
+
+====== Matlab Parallel Server ======
+
+The MPS allows for a larger number of MATLAB workers to be used on a single node and/or across several compute nodes. The current MPS license we have on the cluster allows for using up to 512 MATLAB workers. MPS is integrated with SLURM and works with MATLAB version R2019b, available with module **MATLAB/9.7**. The below example steps describe how to set up and use MPS on the RCI cluster:
+
+  - Log on to the cluster and start an interactive / test bash shell.
+<code>
+user@login1:~/matlab$ srun -p cpu --time=0-00:30 --mem=16G --pty bash -i
+# Load a MATLAB software module
+user@n18:~/matlab$ ml MATLAB/9.7
+Start MATLAB interactively without a GUI
+user@n18:~/matlab$ matlab -nosplash -nodesktop -nodisplay
+</code>
+  - Run configCluster in the MATLAB shell:
+<code>
+
+</code>
+===== Start MATLAB desktop environment =====
+
+If MATLAB desktop application is needed, it's required to have installed any X-server on your computer (recommended is [[https://mobaxterm.mobatek.net/|MobaXterm]] for windows ).  
+<code>
+user@login1:~$ salloc -p smp --cpus-per-task=100      # allocates 100 CPUs in smp partition
+salloc: Granted job allocation 1237191                # granted
+user@login1:~$ squeue -u user                         # checking on which node, its n33
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           1237191       smp     bash  user    R       0:15      1 n33
+user@login1:~$ ssh -X n33                             # ssh login with X11 forwarding onto n33
+Last login: Fri Jan 24 14:15:20 2020 from login1
+user@n33:~$ ml MATLAB                                 # load the latest MATLAB module
+user@n33:~$ matlab                                    # start MATLAB desktop environment, MATLAB window should appear
+</code>
+
+
+===== Standard batch jobs =====
+
+Running MATLAB script via SLURM batch job is recommended way how to work with MATLAB on RCI cluster. 
+
+====== Running MATLAB from web browser ======
+
+With a small amount of configuration, you can use a compute node to run a MATLAB and access it from your local machine. The main steps are:
+
+  - Start a matlab proxy job.
+  - Start an ssh tunnel.
+  - Use your local browser to connect.
+
+==== Start matlab proxy job ====
+Here is a template for submitting a matlab-proxy as a batch job. You may need to edit some of the SLURM options, including the time limit or the partition.  Save your edited version of this script on the cluster, and submit it with sbatch.
+
+<code>
+user@login1:~$ cat matlab_proxy.batch
+#!/bin/bash
+#SBATCH --partition cpufast
+#SBATCH --nodes 1
+#SBATCH --ntasks-per-node 1
+#SBATCH --cpus-per-task 24
+#SBATCH --mem-per-cpu 8G
+#SBATCH --job-name matlab
+#SBATCH --output matlab-proxy-%J.log
+
+# get tunneling info
+port=$(shuf -i8000-9999 -n1)
+node=$(hostname -s)
+user=$(whoami)
+
+# print tunneling instructions 
+echo -e "
+MacOS or linux terminal command to create your ssh tunnel:
+ssh -N -L ${port}:${node}:${port} ${user}@login.rci.cvut.cz
+
+Here is the MobaXterm info:
+
+Forwarded port:same as remote port
+Remote server: ${node}
+Remote port: ${port}
+SSH server: login.rci.cvut.cz
+SSH login: $user
+SSH port: 22
+
+Use a Browser on your local machine to go to:
+http://localhost:${port}/matlab  (prefix w/ https:// if using password)
+"
+
+ml MATLAB
+ml matlab-proxy
+env MWI_BASE_URL="/matlab" MWI_APP_HOST="${node}" MWI_APP_PORT="${port}"  matlab-proxy-app
+
+</code>
+
+When finished with editing, you can start matlab_proxy.batch with command:
+<code>
+user@login2:~$ sbatch matlab_proxy.batch
+Submitted batch job 342000
+user@login2:~$ squeue -j 342000
+  JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+ 342000   cpufast   matlab     user  R       0:01      1 n01
+</code>
+
+As you can see, notebook has been started on node n01 and in the ''matlab-proxy-%J.log'' are instructions, how to login.
+
+
+===== Start the SSH tunnel =====
+
+Once you have submitted your job and it starts, your matlab proxy server will be ready for you to connect. You can run squeue -u$(whoami) to check. You will see an "R" in the ST or status column for your matlab proxy job if it is running. If you see a "PD" in the status column, you will have to wait for your job to start running to connect. The log file with information about how to connect will be in the directory you submitted the script from, and be named matlab-proxy-[jobid].log where jobid is the slurm id for your job.
+<code>
+eb@login2:~$ more matlab-proxy-342000.log
+MacOS or linux terminal command to create your ssh tunnel:
+ssh -N -L 9442:n01:9442 eb@login.rci.cvut.cz
+
+Here is the MobaXterm info:
+
+Forwarded port:same as remote port
+Remote server: n01
+Remote port: 9442
+SSH server: login.rci.cvut.cz
+SSH login: user
+SSH port: 22
+
+Use a Browser on your local machine to go to:
+http://localhost:9442/matlab  (prefix w/ https:// if using password)
+
+
+matlab-proxy requires MATLAB to be loaded separately and BEFORE this module (2020b or later)
+
+
+INFO:MATLABProxyApp:MLM_LICENSE_FILE with value: /mnt/appl/software/MATLAB/matlab912/licenses/network.lic is a path to a file. MATLAB will attempt to use it.
+INFO:MATLABProxyApp:
+============================
+MATLAB can be accessed at:
+http://n01:9442/matlab
+============================
+
+INFO:MATLABProxyApp:Deleting any cached licensing files!
+INFO:MATLABProxyApp:Stopped (any running)MATLAB process.
+INFO:MATLABProxyApp:Communicating with MATLAB on port:31511, lock file: /home/eb/.matlab/MWI/ports/mwi_proxy.lock.31511
+INFO:MATLABProxyApp:matlab_stderr_reader() task: Starting task...
+MATLAB is selecting SOFTWARE OPENGL rendering.
+Opening log file:  /home/eb/.matlab/MWI/ports/9442/java.log.48823
+ESC[?1hESC=
+                            < M A T L A B (R) >
+                  Copyright 1984-2022 The MathWorks, Inc.
+             R2022a Update 4 (9.12.0.2009381) 64-bit (glnxa64)
+                                July 7, 2022
+
+ 
+To get started, type doc.
+For product information, visit www.mathworks.com.
+
+</code>
+
+==== Linux and Mac OS X ====
+On a Mac or Linux machine, you can start the tunnel with an SSH command. You can check the output from the job you started to get the specifc info you need.
+<code>
+ssh -N -L 9442:n01:9442 user@login.rci.cvut.cz
+</code>
+
+==== Windows ====
+On a windows machine, we recommend you use MobaXterm. You will need to take a look at your job's log file to get the details you need. Then start MobaXterm:
+
+  * Under Tools choose "MobaSSHTunnel (port forwarding)".
+  * Click the "New SSH Tunnel" button.
+  * Click the radio button for "Local port forwarding".
+  * Use the information in your matlab proxy job log file to fill out the boxes.
+  * Click Save.
+  * On your new tunnel, click the key symbol under the settings column and choose your ssh private key.
+  * Click the play button under the Start/Stop column.
+{{:ssh_tunel1.png?nolink|}}
+{{:ssh_tunel2.png?nolink|}}
+===== Use the MATLAB in browser =====
+Finally, open a web browser on your local machine and enter the address http://localhost:port where port is the one specified in your log file: 
+<code>
+http://n01:9442/matlab
+</code>
+
+so your address will be:
+<code>
+http://localhost:9442/matlab
+</code>
+
+===== Stop the matlab proxy =====
+
+On login node just cancel your SLURM batch job:
+<code>
+user@login2:~$ scancel 342000
+</code>

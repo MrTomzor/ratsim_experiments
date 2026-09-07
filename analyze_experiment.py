@@ -12,7 +12,9 @@ Walks `<exp_dir>/runs/<variation>__<method>__seed<i>/`, loads each
   - `train_<metric>.png`   — rolling-mean curves vs cumulative env steps,
                              colored per variation, linestyle per method.
                              Per-seed lines drawn thin; per-(variation,method)
-                             mean drawn bold.
+                             mean drawn bold. Wrapper-added fields like
+                             `difficulty` (adaptive defs) are plotted too
+                             whenever any run's JSONL carries them.
   - `eval_<metric>.png`    — bar chart per metric, x-axis grouped by method,
                              bars colored per variation, error bars = std
                              across per-seed means (RL-paper standard).
@@ -25,6 +27,12 @@ convention the scheduler uses: $PPO_PYTHON_PATH / $DREAMER_PYTHON_PATH).
 SB3 runs go through `eval_one_run.py`; dreamer runs go through
 `eval_one_run_dreamer.py` (loads via embodied + dreamerv3.Agent).
 
+Add `--difficulty D` (0..1) with `--run-eval` for a def with an
+`adaptive_difficulty:` block to evaluate every run at one fixed rung of the
+difficulty ladder instead of at the def's base world config. It overwrites the
+same `eval_episodes.jsonl`, so a run at a different D replaces the previous
+eval; each record carries the `difficulty` field that produced it.
+
 Add `--ablate-memory` (dreamer-only) to also run an RSSM amnesia eval; results
 land in `eval_episodes_ablated.jsonl` and produce
 `eval_<metric>_ablation.png` paired bars next to the baseline plots.
@@ -35,6 +43,7 @@ sb3 venv (needs pandas + matplotlib).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -68,6 +77,10 @@ EVAL_SCRIPT_BY_METHOD = {
 # (see env.py's _log_episode_jsonl and test.py's make_episode_result).
 TRAIN_METRICS = ["total_score", "objects_found"]
 EVAL_METRICS = ["total_score", "objects_found"]
+# Plotted only when at least one run's train JSONL actually carries the field
+# (wrappers add these via extra_log_fields — e.g. 'difficulty' from
+# AdaptiveDifficultyWrapper on defs with an `adaptive_difficulty:` block).
+OPTIONAL_TRAIN_METRICS = ["difficulty"]
 
 
 # -- Discovery --------------------------------------------------------------
@@ -103,10 +116,25 @@ def parse_run_id(run_dir_name: str) -> tuple[str, str, int] | None:
 
 
 def load_jsonl(p: Path) -> pd.DataFrame | None:
+    """Load a JSONL file, skipping unparseable lines with a warning.
+
+    Concurrent appends from n_envs>1 could tear lines on network filesystems
+    (fixed writer-side with flock in env.py, but files written before that fix
+    carry a few torn records). A whole-file pd.read_json would refuse the
+    entire run over one bad line; parsing per line just drops it."""
     if not p.exists() or p.stat().st_size == 0:
         return None
-    df = pd.read_json(p, lines=True)
-    return df if len(df) else None
+    records, bad = [], 0
+    with open(p) as f:
+        for line in f:
+            try:
+                records.append(json.loads(line))
+            except ValueError:
+                bad += 1
+    if bad:
+        print(f"  WARN: {p}: skipped {bad} corrupt line(s) "
+              f"({len(records)} good)")
+    return pd.DataFrame.from_records(records) if records else None
 
 
 def discover_runs(exp_dir: Path) -> list[dict]:
@@ -378,6 +406,7 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                       deterministic: bool = False,
                       eval_metaseed: int = 42,
                       ablate_memory: bool = False,
+                      difficulty: "float | None" = None,
                       spawn_unity: bool = False) -> None:
     """Sequentially shell out to eval_one_run.py for each run in its method's
     venv. Subprocess inherits stdout/stderr so per-episode progress streams
@@ -386,7 +415,12 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
 
     --ablate-memory is dreamer-only (RSSM amnesia via is_first=True every
     step). Non-dreamer runs are skipped when this flag is on so we don't
-    silently produce a non-ablated 'ablation' result."""
+    silently produce a non-ablated 'ablation' result.
+
+    `difficulty` (0..1) is forwarded to every eval script and pins an
+    adaptive-difficulty def's world at that fixed d, so all runs are compared
+    on the same rung of the ladder rather than each at wherever its own
+    difficulty walk ended."""
     succeeded, skipped, failed = [], [], []
     for r in runs:
         method = r["method"]
@@ -414,6 +448,8 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                "--eval_metaseed", str(eval_metaseed)]
         if deterministic:
             cmd.append("--deterministic")
+        if difficulty is not None:
+            cmd += ["--difficulty", str(difficulty)]
         if ablate_memory:
             cmd.append("--ablate-memory")
         if spawn_unity:
@@ -489,6 +525,17 @@ def main() -> None:
                          "world sequence drawn from this seed; pass the same "
                          "value to a human-control session to reproduce. Only "
                          "meaningful with --run-eval.")
+    ap.add_argument("--difficulty", type=float, default=None, metavar="D",
+                    help="Evaluate every run at a FIXED difficulty d in "
+                         "[0, 1] (0 = easiest, 1 = hardest), forwarded to the "
+                         "eval scripts. Only for defs with an "
+                         "`adaptive_difficulty:` block: its ranges are "
+                         "interpolated once at d and merged over the final "
+                         "stage's world config, so all runs are compared on "
+                         "the same rung instead of each at wherever its own "
+                         "difficulty walk ended. The value is stamped into "
+                         "every eval JSONL record as 'difficulty'. Only "
+                         "meaningful with --run-eval.")
     ap.add_argument("--ablate-memory", action="store_true",
                     dest="ablate_memory",
                     help="Memory-ablation eval: forwards --ablate-memory to "
@@ -512,6 +559,8 @@ def main() -> None:
 
     if args.run_eval is not None and args.run_eval < 1:
         ap.error("--run-eval N requires N >= 1")
+    if args.difficulty is not None and not 0.0 <= args.difficulty <= 1.0:
+        ap.error(f"--difficulty must be in [0, 1], got {args.difficulty}")
 
     exp_dir = resolve_exp_dir(args.exp)
     print(f"Experiment dir: {exp_dir}")
@@ -524,13 +573,17 @@ def main() -> None:
     if args.run_eval is not None:
         mode = "deterministic" if args.deterministic else "stochastic"
         ablation_tag = "  [ABLATE MEMORY]" if args.ablate_memory else ""
+        difficulty_tag = ("" if args.difficulty is None
+                          else f", difficulty={args.difficulty:.3f}")
         print(f"\nRunning {args.run_eval} {mode} eval episode(s) per run "
-              f"(eval_metaseed={args.eval_metaseed}, sequential, may take a while)"
+              f"(eval_metaseed={args.eval_metaseed}{difficulty_tag}, "
+              f"sequential, may take a while)"
               f"{ablation_tag}...")
         run_eval_for_runs(runs, exp_dir, args.run_eval,
                           deterministic=args.deterministic,
                           eval_metaseed=args.eval_metaseed,
                           ablate_memory=args.ablate_memory,
+                          difficulty=args.difficulty,
                           spawn_unity=args.spawn_unity)
         # Re-discover so newly written eval_episodes(_ablated).jsonl files are picked up.
         runs = discover_runs(exp_dir)
@@ -538,6 +591,10 @@ def main() -> None:
         if args.deterministic:
             print("[analyze] WARN: --deterministic only takes effect with "
                   "--run-eval; ignoring.")
+        if args.difficulty is not None:
+            print("[analyze] WARN: --difficulty only takes effect with "
+                  "--run-eval (it changes the worlds an eval is run on, not "
+                  "how cached results are plotted); ignoring.")
         if args.ablate_memory:
             print("[analyze] --ablate-memory without --run-eval: re-plotting "
                   "from any cached eval_episodes_ablated.jsonl files; not "
@@ -555,6 +612,10 @@ def main() -> None:
 
     for m in TRAIN_METRICS:
         plot_training_curve(runs, m, args.rolling, out_dir)
+    for m in OPTIONAL_TRAIN_METRICS:
+        if any(r["train_df"] is not None and m in r["train_df"].columns
+               and r["train_df"][m].notna().any() for r in runs):
+            plot_training_curve(runs, m, args.rolling, out_dir)
 
     if n_eval:
         for m in EVAL_METRICS:

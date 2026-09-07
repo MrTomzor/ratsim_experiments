@@ -1,0 +1,32 @@
+====== RCI Cluster software ======
+
+There is only basic runtime environment installed on computation nodes of the cluster. All other software is available as modules or as containers or both. It means, that user have to load module or container before can use a software. The advantage is, that there are multiple version of the software available and user can choose exact version of the needed software. There are differences between installed software for Intel (n01-n33) and AMD (a01-16,g01-12) nodes, but all Intel nodes shared same software and all AMD nodes shared same software. GPU optimized software can be run only on GPU nodes. 
+**Software compiled with optimization on Intel nodes should not work on AMD nodes, because Intel processors have different instruction set than AMD processors.** 
+
+**RCI cluster users should stop to use older modules than foss/fosscuda-2020b**, because this modules are not available on AMD nodes. Also software compiled against CUDA 11.x (from fosscuda-2020b) should be much faster than same version compiled against CUDA 10.x . Speedup is 15-30% on same HW.
+
+**Using Conda and Anaconda generic compiled packages is not recommended.** Software modules available on RCI cluster are compiled with the best optimization for RCI hardware, so should be always faster, than Conda packages. If there is some module missing on RCI cluster, ask administrator to install it.
+
+===== Modules =====
+
+Modules provide a convenient way to dynamically change the users’ environment through modulefiles. This includes easily adding or removing directories to the PATH environment variable.
+
+A modulefile contains the necessary information to allow a user to run a particular application or provide access to a particular library. All of this can be done dynamically without logging out and back in. Modulefiles for applications modify the user’s path to make access easy. Modulefiles for Library packages provide environment variables that specify where the library and header files can be found.
+
+It is also very easy to switch between different versions of a package or remove it from environment.
+**There are different modules installed on Intel and AMD nodes.**
+
+==== More info: ====
+  * [[modules|How to work with modules]]
+  * [[installed_modules_all|Available modules on both Intel and AMD nodes]]
+  * [[installed_modules|Available modules on Intel nodes]]
+  * [[installed_modules_amd|Available modules on AMD nodes]]
+
+
+===== Containers =====
+
+Containers provides so called OS level virtualization. This means that the entire user space portion of a Linux operating system, including programs, custom configurations, and environment is packed into container image and can be interchanged at runtime. Singularity container solution is used on RCI cluster, but Docker containers can be easily used with Singularity. Singularity images are portable as one file. 
+
+==== More info ====
+  * How to work with containers
+  * Containers already available on RCI cluser

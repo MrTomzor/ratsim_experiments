@@ -1,0 +1,408 @@
+====== GPU cards ======
+
+===== Hardware =====
+
+==== Intel nodes ====
+
+12 x GPU nodes n21-n32  each with 4 x NVIDIA Tesla V100 with 32GB graphic memory and NVLink2 interconnection. NVLink2 allows very fast communication in multiGPU jobs via libraries like [[https://developer.nvidia.com/nccl|NCCL]]. CUDA compute capability is 7.0. Supported from CUDA 10.0.
+
+<code>
+nvidia-smi topo -m
+
+        GPU0    GPU1    GPU2    GPU3    mlx5_0  CPU Affinity
+GPU0     X      NV2     NV2     NV2     NODE    0-17,36-53
+GPU1    NV2      X      NV2     NV2     NODE    0-17,36-53
+GPU2    NV2     NV2      X      NV2     SYS     18-35,54-71
+GPU3    NV2     NV2     NV2      X      SYS     18-35,54-71
+mlx5_0  NODE    NODE    SYS     SYS      X
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe switches (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing a single PCIe switch
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code>
+
+==== AMD nodes ====
+
+10 x 4GPU nodes g01-g10  each with 4 x NVIDIA Tesla A100 with 40GB graphic memory and NVLink3 interconnection. NVLink3 allows very fast communication in multiGPU jobs via libraries like [[https://developer.nvidia.com/nccl|NCCL]]. CUDA compute capability is 8.0. Supported from CUDA 11.0 (at least fosscuda-2020b is needed).
+
+<code>
+nvidia-smi topo -m
+	GPU0	GPU1	GPU2	GPU3	mlx5_0	mlx5_1	mlx5_2	mlx5_3	CPU Affinity	NUMA Affinity
+GPU0	 X 	NV4	NV4	NV4	NODE	NODE	SYS	SYS	0-31,64-95	0
+GPU1	NV4	 X 	NV4	NV4	NODE	NODE	SYS	SYS	0-31,64-95	0
+GPU2	NV4	NV4	 X 	NV4	SYS	SYS	NODE	NODE	32-63,96-127	1
+GPU3	NV4	NV4	NV4	 X 	SYS	SYS	NODE	NODE	32-63,96-127	1
+mlx5_0	NODE	NODE	SYS	SYS	 X 	PIX	SYS	SYS		
+mlx5_1	NODE	NODE	SYS	SYS	PIX	 X 	SYS	SYS		
+mlx5_2	SYS	SYS	NODE	NODE	SYS	SYS	 X 	PIX		
+mlx5_3	SYS	SYS	NODE	NODE	SYS	SYS	PIX	 X 		
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code>
+
+2 x 8GPU nodes g11 and g12  each with 8 x NVIDIA Tesla A100 with 40GB graphic memory and NVLink3 interconnection. NVLink3 allows very fast communication in multiGPU jobs via libraries like [[https://developer.nvidia.com/nccl|NCCL]].
+<code>
+nvidia-smi topo -m
+	GPU0	GPU1	GPU2	GPU3	GPU4	GPU5	GPU6	GPU7	mlx5_0	mlx5_1	mlx5_2	mlx5_3	mlx5_4	mlx5_5	CPU Affinity	NUMA Affinity
+GPU0	 X 	NV12	NV12	NV12	NV12	NV12	NV12	NV12	PXB	PXB	PXB	PXB	SYS	SYS	0-63,128-191	0
+GPU1	NV12	 X 	NV12	NV12	NV12	NV12	NV12	NV12	PXB	PXB	PXB	PXB	SYS	SYS	0-63,128-191	0
+GPU2	NV12	NV12	 X 	NV12	NV12	NV12	NV12	NV12	NODE	NODE	NODE	NODE	SYS	SYS	0-63,128-191	0
+GPU3	NV12	NV12	NV12	 X 	NV12	NV12	NV12	NV12	NODE	NODE	NODE	NODE	SYS	SYS	0-63,128-191	0
+GPU4	NV12	NV12	NV12	NV12	 X 	NV12	NV12	NV12	SYS	SYS	SYS	SYS	NODE	NODE	64-127,192-255	1
+GPU5	NV12	NV12	NV12	NV12	NV12	 X 	NV12	NV12	SYS	SYS	SYS	SYS	NODE	NODE	64-127,192-255	1
+GPU6	NV12	NV12	NV12	NV12	NV12	NV12	 X 	NV12	SYS	SYS	SYS	SYS	NODE	NODE	64-127,192-255	1
+GPU7	NV12	NV12	NV12	NV12	NV12	NV12	NV12	 X 	SYS	SYS	SYS	SYS	NODE	NODE	64-127,192-255	1
+mlx5_0	PXB	PXB	NODE	NODE	SYS	SYS	SYS	SYS	 X 	PIX	PXB	PXB	SYS	SYS		
+mlx5_1	PXB	PXB	NODE	NODE	SYS	SYS	SYS	SYS	PIX	 X 	PXB	PXB	SYS	SYS		
+mlx5_2	PXB	PXB	NODE	NODE	SYS	SYS	SYS	SYS	PXB	PXB	 X 	PIX	SYS	SYS		
+mlx5_3	PXB	PXB	NODE	NODE	SYS	SYS	SYS	SYS	PXB	PXB	PIX	 X 	SYS	SYS		
+mlx5_4	SYS	SYS	SYS	SYS	NODE	NODE	NODE	NODE	SYS	SYS	SYS	SYS	 X 	PIX		
+mlx5_5	SYS	SYS	SYS	SYS	NODE	NODE	NODE	NODE	SYS	SYS	SYS	SYS	PIX	 X 		
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code>
+
+==== H200 nodes ====
+3 x 8GPU nodes h01-03  each with 8 x NVIDIA Tesla H200 with 141GB graphic memory and NVLink3 interconnection between each 4 GPUs. NVLink3 allows very fast communication in multiGPU jobs via libraries like [[https://developer.nvidia.com/nccl|NCCL]].
+<code>
+nvidia-smi topo -m
+	GPU0	GPU1	GPU2	GPU3	GPU4	GPU5	GPU6	GPU7	NIC0	NIC1	NIC2	NIC3	CPU Affinity	NUMA Affinity	GPU NUMA ID
+GPU0	 X 	NV6	NV6	NV6	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	8-15,72-79	1		N/A
+GPU1	NV6	 X 	NV6	NV6	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	8-15,72-79	1		N/A
+GPU2	NV6	NV6	 X 	NV6	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	24-31,88-95	3		N/A
+GPU3	NV6	NV6	NV6	 X 	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	24-31,88-95	3		N/A
+GPU4	SYS	SYS	SYS	SYS	 X 	NV6	NV6	NV6	SYS	SYS	SYS	SYS	40-47,104-111	5		N/A
+GPU5	SYS	SYS	SYS	SYS	NV6	 X 	NV6	NV6	SYS	SYS	SYS	SYS	40-47,104-111	5		N/A
+GPU6	SYS	SYS	SYS	SYS	NV6	NV6	 X 	NV6	PIX	PIX	SYS	SYS	56-63,120-127	7		N/A
+GPU7	SYS	SYS	SYS	SYS	NV6	NV6	NV6	 X 	PIX	PIX	SYS	SYS	56-63,120-127	7		N/A
+NIC0	SYS	SYS	SYS	SYS	SYS	SYS	PIX	PIX	 X 	PIX	SYS	SYS				
+NIC1	SYS	SYS	SYS	SYS	SYS	SYS	PIX	PIX	PIX	 X 	SYS	SYS				
+NIC2	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	 X 	PIX				
+NIC3	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	PIX	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code>
+==== Interactive nodes ====
+
+Dedicated node for interactive work dgx10  each with 4 x NVIDIA Tesla A100 with 80GB graphic memory and NVLink3 interconnection. NVLink3 allows very fast communication in multiGPU jobs via libraries like [[https://developer.nvidia.com/nccl|NCCL]]. CUDA compute capability is 8.0. Supported from CUDA 11.0 (at least fosscuda-2020b is needed). The interactive node is accessible in the partition **interactive**  with 72 hours time limit.
+
+There are available all [[installed_modules_amd|AMD software modules]]. 
+
+
+===== GPU allocations =====
+
+GPU nodes are in gpu,longjobs and deadline partitions. If you want to work with GPU card, you have to allocate it with SLURM. **GPUs are allocated exclusively, so only 1 user at given time can work with allocated GPU.**
+
+==== Interactive work ====
+
+Interactive work with GPUs is available ony in the partitions: **gpufast,amdgpufast and interactive**.
+<code>srun -p gpufast --gres=gpu:2 --pty bash -i</code> will allocate 2 GPUs on a GPU node. Without allocation your job will not see any GPUs:
+<code>
+user@login1:~$ srun -p gpufast --gres=gpu:1 --pty bash -i
+user@n27:~$ nvidia-smi
+Wed May 22 14:20:04 2019
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 418.40.04    Driver Version: 418.40.04    CUDA Version: 10.1     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-SXM2...  On   | 00000000:89:00.0 Off |                    0 |
+| N/A   34C    P0    44W / 300W |      0MiB / 32480MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+user@n27:~$ exit
+exit
+</code>
+
+**Note:  GPU allocation does not work with salloc / ssh method. Always use srun --pty for interactive GPU job.** 
+
+=== Allocating 80GB GPU  ===
+
+There are 32GB memory in the GPUs in the intel nodes and 40GB in the AMD nodes. But there is special node dgx10 with 4 80GB GPUs A100. If this special node is needed, srun should looks like this:
+
+<code>
+srun -p interactive --gres=gpu:80gb:1 --pty bash -i
+</code>
+
+==== Batch job ====
+
+Multiple nodes with multiple GPUs is possible to allocate for batch job. Prepare your batch file:
+<code>
+#!/bin/bash
+#SBATCH --nodes=2               # number of nodes
+#SBATCH --ntasks-per-node=4     # processes per node
+#SBATCH --cpus-per-task=2       # number of CPU cores per process
+#SBATCH --gres=gpu:4            # GPUs per node 
+#SBATCH --partition=gpu         # put the job into the gpu partition/queue
+#SBATCH --output=job_%j.out     # file name for stdout/stderr
+#SBATCH --mem=100G              # how much CPU memory can be allocated for the job (hardware limit: 384 GB per node)
+#SBATCH --time=24:00:00         # maximum wall time allocated for the job (max 24h for the gpu partition)
+#SBATCH --job-name=my_test        # job name (default is the name of this file)
+
+ml fosscuda/2019a 
+mpirun myjob
+</code>
+This jobs requires 2 nodes each with 4 GPUs and 8 CPU cores and 100G of the memory. On each node will start 4 processes myjob which requires fosscuda/2019a module. Each process will see 4 GPUs and have to decide which GPU will use.
+
+When more GPUs are requested by sbatch and multiple processes is started by srun (inside sbatch), each process will see all requested GPUs otherwise is restricted by --gres=gpu parameter of srun.  In the following example, 4 GPUs are requested and 4 processes are started inside sbatch, and each process is limited to 1 GPU. 
+
+<code>
+#!/bin/bash
+#SBATCH --nodes=1               
+#SBATCH --ntasks-per-node=4     
+#SBATCH --cpus-per-task=1       
+#SBATCH --gres=gpu:4           
+#SBATCH --partition=gpu         
+#SBATCH --output=job_%j.out     
+
+ml fosscuda/2019a
+srun --gres=gpu:1 -n1 --exclusive ~/cuda_device_query
+srun --gres=gpu:1 -n1 --exclusive ~/cuda_device_query
+srun --gres=gpu:1 -n1 --exclusive ~/cuda_device_query
+srun --gres=gpu:1 -n1 --exclusive ~/cuda_device_query
+</code>
+
+When submited by sbatch command, will generate file job_JOBID.out where output from 4 processes ~/cuda_device_query ( [[https://github.com/NVIDIA/cuda-samples/tree/master/Samples/deviceQuery|CUDA samples deviceQuery utility]]) is stored. Each process will see unique GPU:
+<code>
+grep ID job_49569.out
+  Device PCI Domain ID / Bus ID / location ID:   0 / 97 / 0
+  Device PCI Domain ID / Bus ID / location ID:   0 / 138 / 0
+  Device PCI Domain ID / Bus ID / location ID:   0 / 98 / 0
+  Device PCI Domain ID / Bus ID / location ID:   0 / 137 / 0
+</code>
+====== Multi-node multi-GPU tasks ======
+ Libraries [[https://developer.nvidia.com/nccl|NCCL]] and [[https://github.com/horovod/horovod|Horovod]] allows run multi-node training jobs. Always use prepared software modules for multinode training. Modules are optimized compiled for RCI cluster environment. [[installed_modules#PyTorch|Available PyTorch modules]] compiled with NCCL support.
+===== PyTorch Multi-node NCCL example =====
+For example, let's consider the [[https://github.com/pytorch/examples/tree/master/imagenet|PyTorch ImageNet script]]. To run it in the multi-node regime ( 2 GPUs per node, 2 nodes) you can use the following script
+<code>
+ #!/bin/bash
+#SBATCH --job-name=multinode
+#SBATCH --output=multinode.out
+#SBATCH --time=11:00:00
+#SBATCH --partition=gpu
+#SBATCH --nodes=2
+#SBATCH --ntasks=2
+#SBATCH --gres=gpu:2
+#SBATCH --mem=128G
+
+module purge
+module load PyTorch/1.8.0-fosscuda-2020b
+
+declare -a nodes=()
+declare -a ips=()
+while read line; do
+    nodes+=( $line )
+    ips+=( $(getent hosts $line | cut -d' ' -f1) )
+done <<< $(scontrol show hostnames $SLURM_JOB_NODELIST)
+
+PORT=$(shuf -i30000-60000 -n1)
+
+srun -N1 -n1 --gres=gpu:2 python main.py -a resnet50 \
+                                  --dist-url "tcp://${ips[0]}:$PORT" \
+                                  --dist-backend 'nccl' \
+                                  --multiprocessing-distributed \
+                                  --rank 0 \
+                                  --world-size 2 \
+                                  /mnt/data/public_datasets/imagenet/imagenet_fullres/train/ &
+
+
+srun -N1 -n1 --gres=gpu:2 python main.py -a resnet50 \
+                                  --dist-url "tcp://${ips[0]}:$PORT" \
+                                  --dist-backend 'nccl' \
+                                  --multiprocessing-distributed \
+                                  --rank 1 \
+                                  --world-size 2 \
+                                  /mnt/data/public_datasets/imagenet/imagenet_fullres/train/ &
+
+wait 
+</code>
+
+===== PyTorch Multi-Node Horovod example =====
+In case you would like to use Horovod, you can use the following template with [[https://github.com/horovod/horovod/blob/master/examples/pytorch/pytorch_imagenet_resnet50.py|Horovod ImageNet script]],
+<code>
+#!/bin/bash
+#SBATCH --job-name=multinode
+#SBATCH --output=multinode.out
+#SBATCH --time=18:00:00
+#SBATCH --partition=gpu
+#SBATCH --nodes=4 # Number of nodes
+#SBATCH --ntasks-per-node=8 # Number of MPI process per node
+#SBATCH --gres=gpu:2 # Number of GPUs per node
+#SBATCH --mem=128G
+
+module purge
+module Horovod/0.22.1-fosscuda-2020b-PyTorch-1.8.0
+
+declare -a nodes=()
+while read line; do
+    nodes+=( $line )
+done <<< $(scontrol show hostnames $SLURM_JOB_NODELIST)
+
+NODES=""
+for i in ${!nodes[@]}; do
+    if [ "$i" -eq "0" ]; then
+        NODES+="${nodes[$i]}:2"
+    else
+        NODES+=",${nodes[$i]}:2"
+    fi
+done
+
+horovodrun -np $SLURM_NTASKS --mpi -H $NODES python pytorch_imagenet_resnet50.py --train-dir /mnt/data/public_datasets/imagenet/imagenet_fullres/train/ --val-dir /mnt/data/public_datasets/imagenet/imagenet_fullres/validation/ --batch-size 256
+
+</code>
+
+====== Sharing 1 GPU with multiple tasks ======
+
+When utilization of GPU by one task is low and there are multiple tasks needed to compute, it's possible to create SLURM batch which will run multiple tasks on 1 GPU.
+E.g. when 1 task GPU maximum utilization is 25% and requirement of GPU memory is less than 8GB (Tesla V100 has 32GB of graphics memory), it's possible to run 4 tasks on 1 GPU. The utilization of GPU will be better and 4x more tasks can be run at same time.
+
+Example of SLURM batch, where 4 tasks shares 1 GPU:
+<code>
+#!/bin/bash
+#SBATCH --nodes=1               # number of nodes
+#SBATCH --ntasks-per-node=4     # tasks per node
+#SBATCH --cpus-per-task=1       # number of CPU cores per process
+#SBATCH --gres=gpu:1            # GPUs per node
+#SBATCH --partition=gpu         # put the job into the gpu partition/queue
+#SBATCH --output=mpi_%j.out     # file name for stdout/stderr
+#SBATCH --mem=8G              # how much CPU memory can be allocated for the job (hardware limit: 384 GB per node)
+#SBATCH --job-name=mpi        # job name (default is the name of this file) 
+
+ml  PyTorch/1.4.0-fosscuda-2019b-Python-3.7.4
+export OMPI_MCA_mpi_warn_on_fork=0       #disable MPI warnings
+mpirun -np 4  python mpi.py 10     # use mpi to run 4 tasks
+</code>
+
+As you can see, MPI is used to run multiple tasks inside 1 job. So OpenMPI module have to be loaded before. All foss-* and fosscuda* modules loads OpenMPI as dependency. When you need to set different argument for each task inside this batch, you have to use MPI environment variable ''OMPI_COMM_WORLD_RANK'' which contains task number. 
+Python example script:
+<code>
+import sys
+import os
+
+input = int(sys.argv[1])
+task = int(os.environ["OMPI_COMM_WORLD_RANK"])
+argument = input+task
+print ("Input: " + str(input) + " task: " + str(task) + " argument: " + str(argument) ) 
+</code>
+
+Output of the command ''sbatch mpi.batch'' will be:
+<code>
+nput: 10 task: 0 argument: 10
+Input: 10 task: 3 argument: 13
+Input: 10 task: 1 argument: 11
+Input: 10 task: 2 argument: 12 
+</code>
+
+====== GPU Utilization ======
+
+Please, try to get GPU utilization as high as possible. How to get better GPU utilization?
+  * Use modules with the latest CUDA version available. CUDA 11.7 can be much faster than CUDA 10.3.
+  * With data intensive jobs, always store your data on the fast storage like /mnt/data or /mnt/personal . [[storage|More information about storage]].
+  * [[hardware_gpu#sharing_1_gpu_with_multiple_tasks|Try to run multiple jobs on 1 GPU]].
+
+There is a tool **gpu_usage**, which print GPU utilization of the running jobs.
+
+Without any argument it prints utilization of the logged user
+<code>  
+[user1@login1 ~]# gpu_usage
+JOB_ID    USER      ACCOUNT    QOS         PARTITION     RUN_TIME     NODE    UTILIZATION
+===========================================================================================================
+4948444   user1     k13133     collaborat  gpu           18:24:38     n26     1%
+4948443   user1     k13133     collaborat  gpu           18:24:45     n25     1%
+4954866   user1     k13133     collaborat  gpu           01:20:12     n27     87%
+4953908   user1     k13133     collaborat  gpu           03:38:18     n22     89%
+</code>
+
+With job_id as parameter it prints utilization of given job
+
+<code> 
+[user@login1 ~]# gpu_usage 4920671
+JOB_ID    USER      ACCOUNT    QOS         PARTITION     RUN_TIME     NODE    UTILIZATION
+===========================================================================================================
+4920671   patelyas  patelyas   normal      amdgpuextral  5-03:34:28   g11     30% 30% 37% 33% 32% 31% 29%
+</code>
+
+With **-a** switch it prints utilization of all running GPU jobs.
+<code>
+[user@login1 ~]# gpu_usage -a
+JOB_ID    USER      ACCOUNT    QOS         PARTITION     RUN_TIME     NODE    UTILIZATION
+===========================================================================================================
+4948444   stojnvla  k13133     collaborat  gpu           18:24:38     n26     1%
+4948443   stojnvla  k13133     collaborat  gpu           18:24:45     n25     1%
+4954866   paplhjak  k13133     collaborat  gpu           01:20:12     n27     87%
+4953908   paplhjak  k13133     collaborat  gpu           03:38:18     n22     89%
+4955338   weitong   k13136     collaborat  gpu           00:03:43     n22     14%
+4955373   weitong   k13136     collaborat  gpu           00:00:54     n23     1%
+4953655   vahidsae  k13136     collaborat  gpu           00:56:43     n26     7%
+4953654   vahidsae  k13136     collaborat  gpu           00:57:25     n26     8%
+4953653   vahidsae  k13136     collaborat  gpu           00:58:01     n29     8%
+4953652   vahidsae  k13136     collaborat  gpu           01:01:51     n24     8%
+4954564   weitong   k13136     collaborat  gpufast       01:41:06     n28     9% 0%
+4931196   hutorole  k13133     collaborat  gpulong       2-06:01:54   n27     75%
+4944280   hutorole  k13133     collaborat  gpulong       11:48:29     n32     85%
+4944279   hutorole  k13133     collaborat  gpulong       20:48:36     n22     80%
+4944278   hutorole  k13133     collaborat  gpulong       21:20:05     n32     75%
+4944276   hutorole  k13133     collaborat  gpulong       21:22:36     n32     83%
+4944277   hutorole  k13133     collaborat  gpulong       21:22:37     n32     79%
+4944264   hutorole  k13133     collaborat  gpulong       1-00:30:11   n24     74%
+4944275   hutorole  k13133     collaborat  gpulong       1-00:12:35   n23     87%
+4944274   hutorole  k13133     collaborat  gpulong       1-00:13:05   n27     83%
+4944273   hutorole  k13133     collaborat  gpulong       1-00:18:28   n24     81%
+4944263   hutorole  k13133     collaborat  gpulong       1-00:37:25   n23     81%
+4944256   hutorole  k13133     collaborat  gpulong       1-00:42:50   n22     82%
+4931819   oberhtom  oberhtom   normal      amdgpu        07:39:55     g08     81% 78% 80% 79%
+4954036   kangchen  kangchen   normal      amdgpu        02:55:52     g07     77%
+4954035   kangchen  kangchen   normal      amdgpu        02:56:00     g07     65%
+4920671   patelyas  patelyas   normal      amdgpuextral  5-03:26:36   g11     30% 31% 38% 31% 30% 29% 32%
+4946172   gebreawe  svobodat   collaborat  amdgpuextral  21:17:15     g03     28%
+4946170   gebreawe  svobodat   collaborat  amdgpuextral  21:17:34     g03     27%
+4946414   gebreawe  svobodat   collaborat  amdgpuextral  21:12:46     g12     34%
+4946162   gebreawe  svobodat   collaborat  amdgpuextral  21:22:30     g03     33%
+4946168   gebreawe  svobodat   collaborat  amdgpuextral  21:22:30     g03     31%
+4946413   gebreawe  svobodat   collaborat  amdgpuextral  21:17:15     g04     31%
+4931029   gebreawe  svobodat   collaborat  amdgpuextral  3-22:41:45   g02     29%
+4931030   gebreawe  svobodat   collaborat  amdgpuextral  3-22:41:45   g07     31%
+4955365   prokojin  prokojin   normal      amdgpufast    00:02:24     g04     0%
+4954976   prokojin  prokojin   normal      amdgpufast    01:05:25     g02     3%
+4955324   drchajan  faiglj     collaborat  amdgpufast    00:04:59     g02     0%
+4955311   weitong   k13136     collaborat  amdgpufast    00:08:10     g02     10%
+4955327   kangchen  kangchen   normal      amdgpulong    00:04:33     g09     34% 39% 21% 24%
+4954254   kangchen  kangchen   normal      amdgpulong    01:51:55     g01     41% 51% 44% 41%
+4942243   bertrjul  k13133     collaborat  amdgpulong    1-01:52:57   g06     87%
+4942244   bertrjul  k13133     collaborat  amdgpulong    1-01:52:57   g11     85%
+4942242   bertrjul  k13133     collaborat  amdgpulong    1-01:53:00   g06     84%
+4942234   bertrjul  k13133     collaborat  amdgpulong    1-01:54:24   g04     86%
+4942235   bertrjul  k13133     collaborat  amdgpulong    1-01:54:24   g05     83%
+4942236   bertrjul  k13133     collaborat  amdgpulong    1-01:54:24   g05     84%
+4932605   guidojac  k13136     collaborat  amdgpulong    2-19:05:17   g12     2%
+</code>

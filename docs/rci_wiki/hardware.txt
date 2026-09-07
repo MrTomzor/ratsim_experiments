@@ -1,0 +1,53 @@
+====== RCI Cluster Hardware ======
+
+Cluster consists from compute nodes, management nodes, data storage and very fast network. There are three subclusters the original nodes Intel (n01-n33), the upgraded AMD nodes from 2021 (a01-a16) and g(01-g12) and H200 nodes from 2025.
+
+===== Compute nodes =====
+==== Original Intel nodes from 2019 ====
+
+  * **n01-20** CPU nodes: 24 cores/48 threads  3.2GHz **Only 46 CPUs can be used for Slurm**(2 x Intel Xeon Scalable Gold 6146), 384GB RAM, 
+  * **n21-n32** GPU nodes: 36 cores/72 threads 2.7GHz **Only 70 CPUs can be used for Slurm** (2 x Intel Xeon Scalable Gold 6150), 384GB RAM, 4 x Tesla V100 with NVLink, 
+  * **n33** multi-CPU node: 192 cores/ 384 threads 2.1GHz **Only 382 CPUs can be used for Slurm** (8 x Intel Xeon Scalable Platinum 8160), **1536GB RAM**
+  * 2TB SSD NVMe in all nodes for fast local scratch storage
+  * Same instruction set in all Intel nodes, so optimized code will run on All nodes. GPU accelerated software will run only on GPU nodes. **Optimized code from Intel nodes will not run on AMD nodes**.
+  * All nodes can access internet address, but cannot be accessed from internet
+  * **48 NVIDIA Tesla V100 GPUs in total**
+
+==== Upgraded AMD nodes from 2021 ====
+
+  * **a01-16** CPU nodes: 64 cores/128 threads 3.1GHz **Only 126 CPUs can be used for Slurm** (2 x AMD EPYC 7543), 1TB RAM, 
+  * **g01-g10** 4GPU nodes: 64 cores/128 threads 3.1GHz **Only 124 CPUs can be used for Slurm** (2 x AMD EPYC 7543), 1TB RAM, 4 x Tesla A100 40GB with NVLink, 
+  * **g11-g12** 8GPU nodes: 128 cores/256 threads 3.1GHz **Only 252 CPUs can be used for Slurm** (2 x AMD EPYC 7763), 1TB RAM, 8 x Tesla A100 40GB with NVLink
+  * **ipu01** node: 64 cores/128 threads 3.1GHz **Only 126 CPUs can be used for Slurm** (2 x AMD EPYC 7543), 1TB RAM, 1 x Graphcore M2000 IPU 
+  * 8TB SSD NVMe in all nodes for fast local scratch storage
+  * Same instruction set in all AMD nodes, so optimized code will run on all AMD nodes. GPU accelerated software will run only on GPU nodes.
+  * All nodes can access internet address, but cannot be accessed from internet
+  * **56 NVIDIA Tesla A100 GPUs in total**
+
+==== H200 nodes from 2025 ====
+  * **h01-h03** 8GPU nodes: 64 cores/128 threads 3.5GHz **Only 124 CPUs can be used for Slurm** (2 x AMD EPYC 9355), 2.3TB RAM, 8 x Tesla H200 141GB with NVLink
+  * 2TB SSD NVMe in all nodes for fast local scratch storage
+  * All nodes can access internet address, but cannot be accessed from internet
+  * **24 NVIDIA Tesla H200 GPUs in total**
+
+===== Management nodes =====
+  * **login.rci.cvut.cz** - main access node with Intel processor (code from nodes n[01-33] will run here)
+  * **login2.rci.cvut.cz** - backup access node and main cluster management node
+  * **login3.rci.cvut.cz** - main access node with AMD processor node (code from nodes a[01-16],g[01-12] will run here)
+  * **login4.rci.cvut.cz** - main access node for H200 nodes 
+
+===== Data storage =====
+  * Network storage Dell EMC Isilon 160TB, scale-out upgradable for home directories
+  * Network all-flash storage Weka 1.2PB, for /mnt/data and /mnt/personal
+  * Archive storage 5PB for /mnt/archive
+
+[[storage|More information about storage]].
+
+===== Network =====
+==== Intel nodes ====
+  * 100GbE InfiniBand EDR for MPI communication, 36 ports                                                                                                                          
+  * 10GbE Ethernet for NFS - 48 ports + 4 x 40GbE
+==== AMD and H200 nodes ====
+  * 200GbE InfiniBand EDR for MPI communication, 40 ports                                                                                                                          
+  * 25GbE Ethernet for NFS - 32 ports 100GbE
+{{:rci_cluster_all_flash_storage_ib_4_.png?nolink|}}

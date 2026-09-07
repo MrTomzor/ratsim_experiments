@@ -1,0 +1,40 @@
+====== CEDMO H200 nodes upgrade 2025 ======
+
+The new cluster nodes have been installed in the summer 2025. The new nodes have got AMD Epyc Turin processors. AMD Epyc Turin processors uses different instructions set than Intel or AMD Epyc Milano, so programs compiled with optimization on H200 nodes are not 100% compatible on older processors and vice versa. Generic compiled programs (in Linux distributions, Conda, PIP etc.) are 100% compatible.
+
+===== The new HW =====
+
+  * **h01-h03** 8GPU nodes: 64 cores/128 threads 3.5GHz (2 x AMD EPYC 9355), 2.3TB RAM, 8 x Tesla H200 141GB with NVLink, 1x2TB NVMe
+  * **login4** management and login node: 32 cores/64 threads 2.6GHz (2 x AMD EPYC 9115), 768GB RAM
+
+ [[hardware|More about RCI Cluster Hardware]] | [[hardware_gpu|More about GPU cards]]
+===== The new partitions =====
+Because the new nodes are not 100% compatible with the older nodes , the new partitions for H200 nodes have been created:
+
+^Partition  ^Nodes ^Time limit ^Interactive ^Suspend ^Priority |
+|**h200fast** |h01-h03 |4 hours |yes |no  |8 | 
+|**h200** |h01-h03 |24 hours |no |no |4 | 
+|**h200long** |h01-h03|72 hours |no |no |2 |
+|**h200extralong** |h01-h03 |504 hours |no |no |1 |
+
+Submition of jobs on h200* partitions is possible from all login nodes (login,login2,login3,login4), but it's recommended to use login4.rci.cvut.cz with AMD processor with same instruction set and software modules as on H200 nodes.
+
+[[jobs|More about SLURM scheduler]]
+
+===== Software =====
+The H200 nodes uses different set of modules, because modules available on older nodes are not compatible.
+NVIDIA H200 GPUs are supported from CUDA 12, so minimum version of foss toolchain is 2023b. Modules from older toolchains are not available on H200 nodes. Sets of installed modules from toolchains foss-2023b and up, should be same on AMD and Intel nodes, so switching between H200,AMD and Intel nodes should be easy, when using newer toolchains.
+
+[[installed_modules_h200|Installed modules on H200 nodes]].
+
+**Always use login4.rci.cvut.cz login node when using modules.**
+Singularity container software is available also on H200 nodes. 
+H200 nodes are running on Rocky Linux 8 (CentOS 8).
+
+
+[[software|More about RCI cluster software]]
+===== Storage =====
+
+Same /home and /mnt/data /mnt/personal is used on all nodes.
+
+[[storage|More about RCI data Storage]]

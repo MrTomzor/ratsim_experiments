@@ -1,0 +1,54 @@
+====== Frequently Asked Questions ======
+
+===== How to run jobs on specific nodes =====
+
+sbatch or srun parameter ''--nodelist'' will allow to run your jobs only on specified list of nodes e.g:
+<code>
+ srun -p longjobs --nodelist=n[01-20]   my_job
+</code>
+Will start in longjobs partition (where all nodes are included) but only on node from n01-n20 .
+Inverse parameter --exclude  will allows, that specified node will not be used.
+<code>
+ srun -p cpu --exclude=n33  my_job
+</code>
+Will run job in cpu partitions (where nodes n01-n20 and n33 are included), but no on n33 (SMP node with different processor).
+ 
+===== libcuda.so.1 missing =====
+If you get error like this, hen using some module:
+<code>
+error while loading shared libraries: libcuda.so.1: cannot open shared object file: No such file or directory
+</code>
+It means, that you are trying to use on CPU node module requires CUDA library, which is available only on GPU nodes (n21-n32). You should specify partition with GPU nodes (gpu, longjobs, deadline) and use **''--gres=gpu:1''** switch for sbatch or srun. Or you should use non GPU version of the module (not from fosscuda toolchain). 
+
+===== Why is my job killed by SLURM? =====
+SLURM terminates jobs which uses more resources than requested. E.g. if your job will use more than 12GB memory, but requested only 12GB, will be killed. [[jobs#resource_allocation|More about SLURM resource allocation]].
+
+===== MPI warning: A process has executed an operation .... =====
+
+Some MPI-aware applications generates warnings:
+<code>
+A process has executed an operation involving a call to the
+"fork()" system call to create a child process.  Open MPI is currently
+operating in a condition that could result in memory corruption or
+other system errors; your job may hang, crash, or produce silent
+data corruption.  The use of fork() (or system() or other calls that
+create child processes) is strongly discouraged.
+
+The process that invoked fork was:
+
+  Local host:          [[236,0],0] (PID 85966)
+
+If you are *absolutely sure* that your application will successfully
+and correctly survive a call to fork(), you may disable this warning
+by setting the mpi_warn_on_fork MCA parameter to 0.
+</code> 
+It's possible to switch off this warning by setting environment variable:
+<code>
+export OMPI_MCA_mpi_warn_on_fork=0
+</code>
+
+===== How to work with Jupyter notebooks on cluster nodes? =====
+Instructions are [[jupyter|here]].
+
+===== How to share 1 GPU with multiple tasks =====
+Instructions are [[hardware_gpu#sharing_1_gpu_with_multiple_tasks|here]].

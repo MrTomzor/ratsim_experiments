@@ -1,0 +1,53 @@
+====== RCI cluster upgrade 2021 ======
+
+The new cluster nodes have been installed in the summer 2021. The new nodes have got AMD Epyc Milan processors instead Intel Xeon on the older nodes. AMD Epyc processors uses different instructions set than Intel, so programs compiled with optimization on Intel processors are not 100% compatible on AMD processors and vice versa. Generic compiled programs (in Linux distributions, Conda, PIP etc.) are 100% compatible.
+
+===== The new HW =====
+
+**There are 1920/3840 cores/threads, 28TB of RAM, 240TB of NVMe SSDs, 56 NVIDIA A100 40GB GPUs available in the AMD nodes.**
+  * **a01-16** CPU nodes: 64 cores/128 threads 2.8GHz (2 x AMD EPYC 7543), 1TB RAM, 8TB NVMe
+  * **g01-g10** 4GPU nodes: 64 cores/128 threads 2.8GHz (2 x AMD EPYC 7543), 1TB RAM, 4 x Tesla A100 40GB with NVLink, 8TB NVMe
+  * **g11-g12** 8GPU nodes: 128 cores/256 threads 2.45GHz (2 x AMD EPYC 7763), 1TB RAM, 8 x Tesla A100 40GB with NVLink, 2x8TB NVMe
+  * **login3** management and login node: 32 cores/64 threads 3.5GHz (2 x AMD EPYC 73F3), 256GB RAM
+  * Ethernet switch 32x100Gbit for NFS and general communication
+  * Infiniband switch 40x200Gbit for MPI and fast parallel filesystem
+
+ [[hardware|More about RCI Cluster Hardware]]
+===== The new partitions =====
+Because the new nodes are not 100% compatible with the older nodes and also there isn't fast MPI communication between Intel and AMD nodes, the new partitions for AMD nodes have been created:
+
+^Partition  ^Nodes ^Time limit ^Interactive ^Suspend ^Priority |
+|**amdfast** |a01-a16 |4 hours |yes |no |8 |
+|**amdgpufast** |g01-g12 |4 hours |yes |no  |8 | 
+|**amd** |a01-a16 |24 hours |no |no  |4 |
+|**amdgpu** |g01-g12 |24 hours |no |no |4 | 
+|**amdlong** |a01-a16 |72 hours |no |yes |2 |
+|**amdgpulong** |g01-g12 |72 hours |no |no |2 |
+|**amdextralong** |a01-a16 |1008 hours |no |yes |1 |
+|**amdgpuextralong** |g01-g12 |504 hours |no |no |1 |
+|**amddeadline** |a01-a16 |24 hours |yes |no |10 |
+|**amdgpudeadline** |g01-g12 |24 hours |yes |no |10 | 
+
+Nodes are with different weights. 4GPU nodes (g01-g10) are with lower weight than 8GPU nodes (g11-g12). So jobs asking for 1-4GPU, will start on 4GPU nodes first. Only when free 4GPU node is not available, will be used 8GPU node.
+
+Submition of jobs on amd* partitions is possible from all login nodes (login,login2,login3), but it's recommended to use login3.rci.cvut.cz with AMD processor with same instruction set and software modules as on all AMD nodes.
+
+[[jobs|More about SLURM scheduler]]
+
+===== Software =====
+The AMD nodes uses different set of modules, because modules available on Intel nodes are not compatible.
+NVIDIA A100 GPUs are supported from CUDA 11, so minimum version of fosscuda toolchain is 2020b. Modules from older toolchains are not available on AMD nodes. Sets of installed modules from toolchains foss/fosscuda-2020b and up, should be same on AMD and Intel nodes, so switching between AMD and Intel nodes should be easy, when using newer toolchains.
+
+[[installed_modules_amd|Installed modules on AMD nodes]].
+
+**Always use login3.rci.cvut.cz login node when using modules.**
+Singularity container software is available also on AMD nodes. 
+AMD nodes are running on Rocky Linux 8 (CentOS 8), Intel nodes are running on CentOS 7.
+
+
+[[software|More about RCI cluster software]]
+===== Storage =====
+
+Same /home , /mnt/data and /mnt/personal is used on all nodes. 
+
+[[storage|More about RCI data Storage]]

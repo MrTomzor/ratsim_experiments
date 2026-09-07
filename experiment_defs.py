@@ -459,6 +459,30 @@ def resolve_stage_world(stage: StageSpec, var: VariationSpec,
     return list(exp.world_preset)
 
 
+def resolve_difficulty_overrides(exp: ExperimentDef, difficulty: float) -> dict:
+    """World-config overrides pinning an adaptive-difficulty def at a fixed d.
+
+    Eval counterpart to the training-time walk: AdaptiveDifficultyWrapper slides
+    d between episodes, this evaluates the def's `adaptive_difficulty.ranges:`
+    once at a d the caller picks and returns a flat override dict to merge over
+    the stage's world config. Merge it, don't wrap — nothing should move d
+    during an eval.
+
+    Raises ValueError if the def has no `adaptive_difficulty:` block (nothing to
+    interpolate) or d is outside [0, 1].
+    """
+    d = float(difficulty)
+    if not 0.0 <= d <= 1.0:
+        raise ValueError(f"difficulty must be in [0, 1], got {difficulty}")
+    if exp.adaptive_difficulty is None:
+        raise ValueError(
+            f"{exp.source}: a fixed difficulty needs an `adaptive_difficulty:` "
+            f"block in the def (no ranges to interpolate).")
+    # Local import: the scheduler imports this module without the gym env.
+    from ratsim_wildfire_gym_env.adaptive_difficulty import interpolate_ranges
+    return interpolate_ranges(exp.adaptive_difficulty.ranges, d)
+
+
 # --- Snapshot --------------------------------------------------------------
 
 def snapshot_experiment(exp: ExperimentDef) -> dict:

@@ -1,0 +1,5 @@
+====== Contact ======
+
+Mail contact to admins: [[cluster_admin@rci.cvut.cz]]
+
+[[https://join.slack.com/t/ctu-rci/shared_invite/enQtNjMzNjMwNjI5NDU5LTZkMzllYTMzMjE5MzYwNWE3YzU1NWNlNWVkNGQzMTA2ZWU3ODc0ZWI3OGQ1ZjBlYWU4ODkyNzQzYjM0ZWQzYjY|Slack workspace CTU-RCI with channel #rci-cluster]] is available. Cluster users can share experiences here.

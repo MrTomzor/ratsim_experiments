@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 #
 # Pull checkpoints for one experiment def from the RCI cluster to this machine,
-# so you can watch the trained policy in the Unity Editor.
+# so you can watch the trained policy in the Unity Editor -- or, with -t, pull
+# just the train_episodes.jsonl files to plot training curves locally.
 #
 #   ./pull_run.sh memory_orthomaze                       # latest ckpt, every method
+#   ./pull_run.sh memory_orthomaze -t                    # train data only (curves)
 #   ./pull_run.sh memory_orthomaze -m dreamer            # only dreamer runs
 #   ./pull_run.sh memory_orthomaze -m ppo,recurrent_ppo -a   # every stage ckpt
 #   ./pull_run.sh memory_orthomaze -A                    # whole run dirs (replay incl.)
 #   ./pull_run.sh memory_orthomaze -o /data/ckpts        # custom destination
+#
+# The modes form a ladder, smallest to largest, and are mutually exclusive
+# (the last one on the command line wins):
+#   -t  train_episodes.jsonl + run_config.json + .done markers (KBs..MBs)
+#       default  ... plus the latest completed checkpoint payload
+#   -a           ... plus every stage's checkpoint payload
+#   -A  the entire run dirs, replay buffers and tensorboard included
+# Re-running into the same dest is cheap (rsync), so combining -t with a
+# checkpoint pull is just two invocations.
 #
 # Default destination: results/rci/<def>/  (mirrors the remote
 # results/experiments/<def>/ layout, so eval_one_run.py can be pointed at it
@@ -31,7 +42,7 @@ set -euo pipefail
 HOST="rci"
 REMOTE_ROOT=""            # empty => /mnt/personal/$USER/git/ratsim_experiments/results/experiments (resolved remotely)
 METHODS=""                # empty => all
-MODE="latest"             # latest | all | full
+MODE="latest"             # train | latest | all | full
 DEST=""
 DRY_RUN=0
 
@@ -47,6 +58,9 @@ usage: $(basename "$0") <def> [options]
   -m, --methods LIST        comma-separated methods to pull, matched against
                             the method field of <variation>__<method>__seed<N>
                             run dirs. Default: all methods.
+  -t, --train-data          pull only the training data (train_episodes.jsonl,
+                            run_config.json, .done markers) -- no checkpoint
+                            payloads. Feed the dest to analyze_experiment.py.
   -a, --all-checkpoints     pull every stage checkpoint, not just the latest.
   -A, --all-data            pull the ENTIRE run directories -- replay buffer,
                             tensorboard, scheduler logs. Hundreds of MB per
@@ -64,6 +78,7 @@ DEF=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -m|--methods)       METHODS="$2"; shift 2 ;;
+        -t|--train-data)    MODE="train"; shift ;;
         -a|--all-checkpoints) MODE="all"; shift ;;
         -A|--all-data)      MODE="full"; shift ;;
         -o|--dest)          DEST="$2"; shift 2 ;;
@@ -140,6 +155,19 @@ for rd in "$exp"/runs/*/; do
         continue
     fi
     if [ -f "$rd/run_config.json" ]; then echo "runs/$run/run_config.json"; fi
+    if [ "$mode" = "train" ]; then
+        if [ -f "$rd/train_episodes.jsonl" ]; then
+            echo "runs/$run/train_episodes.jsonl"
+        else
+            echo "PULLRUN_WARN: $run has no train_episodes.jsonl yet" >&2
+        fi
+        # .done markers are empty files; take them so the local copy knows
+        # how many stages each curve covers.
+        for p in "$rd"checkpoints/*.done; do
+            if [ -e "$p" ]; then echo "runs/$run/checkpoints/$(basename "$p")"; fi
+        done
+        continue
+    fi
     if [ ! -d "$rd/checkpoints" ]; then
         echo "PULLRUN_WARN: $run has no checkpoints/ yet" >&2
         continue
@@ -253,6 +281,15 @@ fi
 echo
 echo "[pull_run] pulled $(du -sh "$DEST" | cut -f1) into $DEST"
 echo
+
+if [ "$MODE" = "train" ]; then
+    echo "Next: plot the training curves (no Unity needed; PNGs land in"
+    echo "$DEST/analysis/):"
+    echo
+    echo "  ~/ratvenv/venv/bin/python $SCRIPT_DIR/analyze_experiment.py $DEST"
+    exit 0
+fi
+
 echo "Next: press Play in the Unity Editor (it listens on :9000). The eval"
 echo "scripts attach to it and WAIT for it -- they never spawn a build unless"
 echo "you pass --spawn -- so you can start them in either order. Then:"

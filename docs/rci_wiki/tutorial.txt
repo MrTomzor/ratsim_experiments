@@ -1,0 +1,11 @@
+====== Tutorial: How to use the RCI cluster in your reasearch ======
+
+Tutorial was presented by D.Večerka on 4.1.2022.
+  * [[https://login.rci.cvut.cz/cluster_tutorial_2022.pdf|Tutorial slides]] 
+  * [[https://login.rci.cvut.cz/cluster_tutorial_2022.mp4|Recording in MP4]] 
+  * [[https://bbb04.felk.cvut.cz/playback/presentation/2.0/playback.html?meetingId=872d2a8dbcd5c32a3f022d2636c49259a8e77875-1641290064075|Recording in BBB online viewer including chat]] 
+
+====== Webinar: Graphcore introduction ======
+
+Webinar with introduction [[https://www.graphcore.ai/products/ipu|Graphcore IPU]] was organised by [[https://mcomputers.cz/|MComputers]] on 16.2.2022
+  * [[https://login.rci.cvut.cz/graphcore_introduction.mp4|Recording in MP4]]

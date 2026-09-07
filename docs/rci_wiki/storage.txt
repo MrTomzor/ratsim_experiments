@@ -1,0 +1,122 @@
+====== Data Storage ======
+
+===== Summary =====
+
+^ Volume            ^ Purpose  ^ Capacity ^ Quota ^ Speed ^ Access ^ SMB/CIFS  |
+^ /home    |Users homes for generic usage | 130TB | 2.5TB | medium | All nodes | \\147.32.87.117\home\%username| 
+^ /mnt/personal    |Personal directory for active data  | 750TB | 10TB | very fast | All nodes | \\login3.rci.cvut.cz\personal\%username |
+^ /mnt/archive    |Personal directory for archived data | 5PB| 100TB | very slow | Only login nodes | Not available | 
+^ /mnt/data    |Projects and groups data | 500TB | 10TB | very fast | All nodes| \\login3.rci.cvut.cz\data |
+^ /data/temporary    |Job temporary storage on the used nodes | 2-7TB| 100GB | fast | Only active node| Not available |
+
+
+===== Home directories =====
+
+Every RCI cluster user has home directory available from all nodes of the cluster. 
+**Home directory is not for storing data. Use /mnt/personal instead. It's much faster and with more capacity.**
+Home directory is available via SMB protocol on the address:
+<code>\\data.rci.cvut.cz\home\%username</code>
+
+Mount on UNIX via SMB/CIFS:
+<code>
+user@mymachine:~$ sudo mkdir /mnt/home
+user@mymachine:~$ sudo mount -t cifs -o user=username //147.32.87.117/home/username /mnt/rci_home
+</code>
+
+Access RCI home directory from any computer via SSHFS:
+<code>user@mymachine:~$ mkdir ~/rci_home
+user@mymachine:~$ sshfs username@login.rci.cvut.cz:/home/username ~/rci_home/
+</code>
+
+Also it is possible to use any SCP client to copy data here. 
+
+Home directories are not archived. But home directories are snapshot-ed every day and it's possible to get deleted data 4 weeks back.
+
+**[[https://login.rci.cvut.cz/secure/rci/disk_usage.php|Summary home usage]]**
+
+===== Personal data directories =====
+
+Every RCI cluster user has own personal data directory available from all nodes of the cluster under **/mnt/personal/username**. This is the place, where to store active data used for computation on the cluster.
+ Personal directory is also available via SMB protocol on the address:
+<code>\\login3.rci.cvut.cz\personal\%username</code>
+
+Mount on UNIX via SMB/CIFS:
+<code>
+user@mymachine:~$ sudo mkdir /mnt/personal
+user@mymachine:~$ sudo mount -t cifs -o user=username //login3.rci.cvut.cz/personal/username /mnt/personal
+</code>
+
+Access RCI home directory from any computer via SSHFS:
+<code>user@mymachine:~$ mkdir ~/personal
+user@mymachine:~$ sshfs username@login3.rci.cvut.cz:/mnt/personal/username ~/personal/
+</code>
+
+Also it is possible to use any SCP client to copy data here. 
+
+Personal directories are not archived. But are snapshot-ed every day and it's possible to get deleted data 4 weeks back.
+
+===== Personal archive directories =====
+
+Every RCI cluster user has own personal archive directory available from all login nodes nodes of the cluster under **/mnt/archive/username**. This is the place, where to store archived data not used for computation anymore.
+ 
+Archive directories are stored on the tape library. But there is SSD tier on the archive server. So when you copy data to /mnt/archive/username , data are stored on the SSD first and the transfer is fast. Then in the background are data moved on the tape and metadata remains on the SSD. The access of archived data is possible, but copying data from tapes to SSD tier can takes up to 1 minute, even for very small file. 
+
+
+
+===== Project data =====
+
+For data shared between group of users is available datastore ''/mnt/data/'' (also available on all nodes) . Ask [[mailto:cluster_admin@rci.cvut.cz|cluster administrators]] to create folder for your group. Data are also available via SMB/CIFS protocol:
+<code>\\login3.rci.cvut.cz\data</code>
+
+Mount on UNIX via SMB/CIFS
+<code>
+user@mymachine:~$ sudo mkdir /mnt/rci_data
+user@mymachine:~$ sudo mount -t cifs -o user=vecerka //login3.rci.cvut.cz/data /mnt/rci_data
+</code>
+
+Access RCI data directory from any computer via SSHFS:
+<code>user@mymachine:~$ mkdir ~/rci_data
+user@mymachine:~$ sshfs username@login3.rci.cvut.cz:/mnt/data ~/rci_data/
+</code>
+
+Again, data are not archived, but only snapshot-ed every day.
+
+
+===== Public datasets =====
+
+Some common datasets are stored under /mnt/data/Public_datasets . If you are using another dataset, which could be useful for other users, ask [[mailto:cluster_admin@rci.cvut.cz|cluster administrators]] to insert it.
+
+Available datasets are: A2D2, COCO, imagenet, KITTI, nuScenes, semantic_kitti, WaymoOpenDataset .
+
+===== Local temporary storage=====
+ 
+
+On computate nodes is available very fast local scratch folder /data/temporary/ for single node jobs.  Those folders are visible only on used node and are removed when job finished, so user have to copy required data to his home before jobs finished.
+
+
+
+
+===== Mount data from different server =====
+
+It's possible to mount directories from external servers via sshfs user space command via SSH protocol:
+<code>user@login1:~$ mkdir ~/external_data
+user@login1:~$ sshfs username@ptak.felk.cvut.cz:/datagrid/ external_data/
+</code>
+Note: data from external servers mounted via SSHFS are available only on access node and should by copied to cluster home to get access from compute nodes.
+
+===== Data Management Plan =====
+
+For project which need to prepare Data Mananagement Plan and have data on RCI cluster, there are answers for [[https://cvut.dsw.elixir-europe.org/wizard|Data Stewardship Wizard]] concerning archiving of data.
+  * **VI.2.b.2 Will the archive be stored on disk or on tape?**   Tape
+  * **VI.2.b.3 Will the archive be stored in a remote location, protecting the data against disasters?** No
+  * **VI.2.b.4 Will the archive need to be protected against loss or theft?** Yes
+  * **VI.2.b.6 Has it been established who has access to the archive, and how fast?**   Yes
+  * **VI.2.b.6.b.1 Has it been established who can ask for a restore during the project?**  Yes
+  * **VI.2.b.6.b.3 Has authority over the data been arranged for when the project is finished (potentially long after)?**   No
+  * **VI.3.b.1 Who will be paying for the long term storage?** This is a service budgeted by one or more of the participating institutes
+  * **VI.3.b.2 What is the minimum lifetime of the archive?** 15 years
+  * **VI.3.b.3 Can the archival period be extended?**    Yes
+  * **VI.3.b.3.b.1 Who will decide whether the archival period is extended?**    Library or archive staff will decide
+  * **VI.3.b.3.b.2 What will the decision whether or not to extend the renewal be based on?**  It will be based on available budge .  It will be based on the predicted use of the archived data.  It will be based on the actual use of the archived data
+  * **VI.3.b.4 Will data formats of data in cold storage be upgraded if they become obsolete?** No
+  * **VI.3.b.5 Will data be migrated regularly to more modern storage media (e.g. newer tapes)?** Yes
