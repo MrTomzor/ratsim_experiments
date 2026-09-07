@@ -211,6 +211,55 @@ socket leaves the Unity port in `TIME_WAIT` (~60 s on Linux), while
 already suspected in that function's own docstring. Wait for
 `ratsim.unity_launcher._port_bindable(port)` before relaunching.
 
+### Dreamer (TBTT): sequential replay with carried RSSM state
+
+The `tbtt` variation in the dreamer ladder defs reproduces the MemoryMaze
+paper's Dreamer (TBTT) (Pasukonis, Lillicrap & Hafner 2022, arXiv 2210.13383
+§4.1): "replaying complete trajectories sequentially and passing the RSSM
+state from one batch to the next", B rows from B different trajectories, each
+started at a random offset. Code: `methods/dreamerv3/tbtt_stream.py`; enabled
+by the raw config key `tbtt.enabled: true` (a variation `method_args` key or
+CLI `method.tbtt.enabled=true`), which also forces `consec_train=1`.
+
+How it relates to `consec4`: both keep the 48-step gradient window (the paper
+used sequence length 48 too) and both carry the RSSM state across chunks via
+the run loop's carry hand-off. consec4 carries for one 192-step window and
+seeds each window from the stored replay latent (`replay_context=16`); tbtt
+carries along the whole stored trajectory of an env worker (episode boundaries
+reset via `is_first` as usual) and only restarts a row when its data is
+evicted or it catches the write head. With `replay_context: 0` (what the defs
+use) a restarted row gets `is_first` forced at its first step, i.e. zero RSSM
+state at a random offset -- the paper's exact behaviour. With K>0 the stored
+latent seeds restarted rows instead (hybrid; supported, not used by the defs).
+
+Per gradient step compute is unchanged (batch shape stays `(B, 48+K)`); the
+cost is a more correlated batch distribution and losing the replay's `online`
+fresh-data queue, neither of which the paper had either.
+
+Counters land in TB/W&B under `replay/`: `tbtt_restart_frac` (rows restarted
+per batch; expect well under 10% on a 1M buffer), `tbtt_stretch_mean/max`
+(steps carried since restart; should reach hundreds to episode length, vs a
+hard 192 for consec4), `tbtt_episode_boundary_frac`.
+
+Pitfall the tests guard: the stock sampler forces `is_first[:, 0] = True` on
+every window (harmless there, it lands in the discarded prefix). A sequential
+stream must not, or it silently resets the carry every chunk and becomes
+vanilla Dreamer.
+
+Tests (dreamer venv, pytest or run the files directly):
+
+```bash
+~/ratvenv/dreamer_venv/bin/python tests/test_tbtt_stream.py   # 12 tests, numpy only
+~/ratvenv/dreamer_venv/bin/python tests/test_tbtt_agent.py    # 5 tests, tiny JAX agent, ~2 min CPU
+```
+
+The JAX tests are the "is TBTT actually happening" evidence: the training
+loss on chunk 2 differs between carried and zero state, but is bit-identical
+once `is_first` is forced (is_first is the only reset); feeding the
+single-pass RSSM state at step L-1 as chunk 2's carry reproduces the single
+pass's `deter` and posterior logits at step L exactly; and `agent.train`
+consumes the stream end to end for K=0 and K=16.
+
 ### Memory ablation (DreamerV3)
 
 Test-time probe for whether a trained DreamerV3 agent is actually using its
