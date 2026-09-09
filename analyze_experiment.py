@@ -407,7 +407,8 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
                       eval_metaseed: int = 42,
                       ablate_memory: bool = False,
                       difficulty: "float | None" = None,
-                      spawn_unity: bool = False) -> None:
+                      spawn_unity: bool = False,
+                      record_trajectories: bool = False) -> None:
     """Sequentially shell out to eval_one_run.py for each run in its method's
     venv. Subprocess inherits stdout/stderr so per-episode progress streams
     live. Failures are reported but don't abort the loop — other runs still
@@ -452,6 +453,8 @@ def run_eval_for_runs(runs: list[dict], exp_dir: Path, n_episodes: int,
             cmd += ["--difficulty", str(difficulty)]
         if ablate_memory:
             cmd.append("--ablate-memory")
+        if record_trajectories:
+            cmd.append("--record-trajectories")
         if spawn_unity:
             # Without this each eval waits for a Unity on :9000 (see
             # unity_attach.py) — right when you're watching in the Editor,
@@ -548,6 +551,11 @@ def main() -> None:
                          "meaningful with --run-eval; without --run-eval the "
                          "ablation plot is still drawn from any cached "
                          "eval_episodes_ablated.jsonl files on disk.")
+    ap.add_argument("--record-trajectories", action="store_true",
+                    dest="record_trajectories",
+                    help="With --run-eval: also record the agent's pose every "
+                         "step (one npz per episode next to the eval JSONL) "
+                         "for plot_trajectories.py. Keep N small.")
     ap.add_argument("--spawn-unity", action="store_true", dest="spawn_unity",
                     help="Let each eval spawn its own headless Unity build "
                          "(needs $RATSIM_UNITY_BIN) instead of attaching to a "
@@ -584,7 +592,8 @@ def main() -> None:
                           eval_metaseed=args.eval_metaseed,
                           ablate_memory=args.ablate_memory,
                           difficulty=args.difficulty,
-                          spawn_unity=args.spawn_unity)
+                          spawn_unity=args.spawn_unity,
+                          record_trajectories=args.record_trajectories)
         # Re-discover so newly written eval_episodes(_ablated).jsonl files are picked up.
         runs = discover_runs(exp_dir)
     else:
@@ -595,6 +604,9 @@ def main() -> None:
             print("[analyze] WARN: --difficulty only takes effect with "
                   "--run-eval (it changes the worlds an eval is run on, not "
                   "how cached results are plotted); ignoring.")
+        if args.record_trajectories:
+            print("[analyze] WARN: --record-trajectories only takes effect "
+                  "with --run-eval; ignoring.")
         if args.ablate_memory:
             print("[analyze] --ablate-memory without --run-eval: re-plotting "
                   "from any cached eval_episodes_ablated.jsonl files; not "

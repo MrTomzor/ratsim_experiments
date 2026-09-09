@@ -143,6 +143,14 @@ def main() -> None:
                          "boundaries). In-distribution amnesia — tests "
                          "whether the trained policy is actually using "
                          "recurrent memory.")
+    ap.add_argument("--record-trajectories", action="store_true",
+                    dest="record_trajectories",
+                    help="Record the agent's pose every step and write one "
+                         "npz per episode under "
+                         "<run_dir>/eval_episodes[_ablated]_trajectories/ "
+                         "(plus a 'trajectory_file' field in the JSONL). "
+                         "Meant for a few episodes feeding "
+                         "plot_trajectories.py.")
     add_unity_attach_args(ap)
     args = ap.parse_args()
 
@@ -228,6 +236,9 @@ def main() -> None:
         else "eval_episodes.jsonl")
     if eval_jsonl.exists():
         eval_jsonl.unlink()  # restart episode_idx at 0
+    from eval_one_run import write_eval_world_config
+    write_eval_world_config(run_dir, world_config, agent_preset, task_preset,
+                            world_preset, args.eval_metaseed, args.difficulty)
 
     run_metadata = {
         "method": method_name,
@@ -251,6 +262,7 @@ def main() -> None:
         episode_log_path=eval_jsonl,
         run_metadata=run_metadata,
         unity_port=port,
+        record_trajectories=args.record_trajectories,
     )
     if args.difficulty is not None:
         # Same field the AdaptiveDifficultyWrapper writes during training, so

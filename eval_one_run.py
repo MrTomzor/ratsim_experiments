@@ -13,7 +13,14 @@ Reads:
 
 Writes:
   <run_dir>/eval_episodes.jsonl — overwritten; same schema as
-                                   train_episodes.jsonl (env.py writes it).
+                                   train_episodes.jsonl (env.py writes it),
+                                   plus `world_seed` per episode.
+  <run_dir>/eval_world_config.json — the resolved world config the eval ran
+                                   on (difficulty overrides baked in), so a
+                                   world can be regenerated from seed later.
+  <run_dir>/eval_episodes_trajectories/env0_ep<i>.npz — only with
+                                   --record-trajectories: per-step poses for
+                                   plot_trajectories.py.
 
 CLI:
     python eval_one_run.py --run_dir <path> --exp_dir <path> --n_episodes N
@@ -105,6 +112,25 @@ def latest_sb3_checkpoint(
     return ckpt, stage_idx
 
 
+def write_eval_world_config(run_dir: Path, world_config: dict, agent_preset,
+                            task_preset, world_preset, eval_metaseed: int,
+                            difficulty: "float | None") -> Path:
+    """Persist the exact world config an eval ran on. With the per-episode
+    `world_seed` in the JSONL this is enough to regenerate any eval world
+    (worldgen dump or a rendered snapshot) without the checkpoint."""
+    out = run_dir / "eval_world_config.json"
+    with open(out, "w") as f:
+        json.dump({
+            "world_config": world_config,
+            "agent_preset": list(agent_preset),
+            "task_preset": list(task_preset),
+            "world_preset": list(world_preset),
+            "eval_metaseed": eval_metaseed,
+            "difficulty": difficulty,
+        }, f, indent=2, default=str)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -137,6 +163,13 @@ def main() -> None:
                          "d never moves during the eval. Requires a def with an "
                          "`adaptive_difficulty:` block. Recorded per episode in "
                          "the eval JSONL as 'difficulty'.")
+    ap.add_argument("--record-trajectories", action="store_true",
+                    dest="record_trajectories",
+                    help="Record the agent's pose every step and write one "
+                         "npz per episode under "
+                         "<run_dir>/eval_episodes_trajectories/ (plus a "
+                         "'trajectory_file' field in the JSONL). Meant for a "
+                         "few episodes feeding plot_trajectories.py.")
     add_unity_attach_args(ap)
     args = ap.parse_args()
 
@@ -217,6 +250,8 @@ def main() -> None:
     eval_jsonl = run_dir / "eval_episodes.jsonl"
     if eval_jsonl.exists():
         eval_jsonl.unlink()
+    write_eval_world_config(run_dir, world_config, agent_preset, task_preset,
+                            world_preset, args.eval_metaseed, args.difficulty)
 
     run_metadata = {
         "method": method_name,
@@ -242,6 +277,7 @@ def main() -> None:
         episode_log_path=eval_jsonl,
         run_metadata=run_metadata,
         unity_port=port,
+        record_trajectories=args.record_trajectories,
     )
     if args.difficulty is not None:
         # Same field the AdaptiveDifficultyWrapper writes during training, so

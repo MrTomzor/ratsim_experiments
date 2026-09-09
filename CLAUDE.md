@@ -353,6 +353,77 @@ Caveats:
   (it changes which worlds an eval runs on, not how cached results are plotted)
   and warns.
 
+### Trajectory figures (rows = worlds, columns = methods)
+
+Per-step poses are **not** recorded by default — only by the eval-time flags
+below. Every method funnels each step through `TaskTracker.update_with_unity_msgs`,
+so one opt-in buffer there (`record_trajectory=True`) covers PPO, RecurrentPPO,
+Dreamer, human and frontier alike. Writers save one npz per episode
+(`ratsim.task_tracker.trajectory_record`) and stamp `world_seed` +
+`trajectory_file` into the JSONL line. `world_seed` is written always, also
+without recording: it is what lines worlds up across methods.
+
+Two scripts, one manifest between them (`<exp_dir>/trajectories.json`):
+
+```bash
+# one row per experiment def (= one world preset), one random finished run per method
+python record_trajectories.py memory_3malls memory_orthomaze --methods ppo,dreamer,frontier
+python record_trajectories.py memory_3malls memory_orthomaze --methods human     # later, you drive
+python record_trajectories.py memory_3malls --methods ppo,dreamer --snapshot ortho   # + overhead pictures
+python snapshot_worlds.py memory_3malls memory_orthomaze --views ortho,persp   # pictures only
+python plot_trajectories.py memory_3malls memory_orthomaze [--overlay] [--methods ppo,dreamer,human] [--background ortho]
+```
+
+`record_trajectories.py` looks the experiment id up under `results/rci/` (pull
+checkpoints first: `./pull_run.sh <exp>`); `--local` looks under
+`results/experiments/` instead, and there is no fallback between the two (a
+stale local copy must never silently shadow the cluster runs — it did once).
+Both scripts also accept a path. It picks one
+run per RL method (random among runs with a finished stage; `--run-seed N` /
+`--rng-seed` to pin), runs `eval_one_run(.py|_dreamer.py) --n_episodes
+<--n-worldseeds> --record-trajectories`, reads the world seeds back from that
+JSONL, and then runs frontier / human through `test.py` on exactly those seeds
+(`eval_seeds=…`, output in `<exp_dir>/external/<method>/`). Re-running with
+other `--methods` adds columns to the same manifest. `--difficulty`,
+`--eval-metaseed`, `--spawn-unity`, `--method-arg frontier.grid_resolution=0.5`
+(forwarded verbatim to the ROS2 launch), `--no-run` (re-index existing
+external output without running), `--local`, `--dry-run`. Frontier needs ROS
+sourced in that shell; human needs the keyboard.
+
+`plot_trajectories.py` draws the manifests in the order given, rows = experiments
+(N rows each if recorded with `--n-worldseeds N`), columns = methods, to
+`results/analysis/trajectories_<grid|overlay>[_<view>][_<name>].png`. Drawing lives in
+`ratsim/ratsim_vis/trajectory_plot.py`: on a blank slate in Unity top-down frame
+(x right, z up), or with `--background ortho|persp` on the rendered world
+snapshot of that view (both straight down: orthographic camera = true map,
+perspective camera = photo-like), projecting the trajectory through the camera
+matrix the snapshot's `.json` sidecar carries (same code for both).
+
+Snapshots come from `snapshot_worlds.py` (or `record_trajectories.py --snapshot
+VIEWS`, which calls it after recording): for every world seed in the manifest it
+resets a rendering Unity (`--port`, default 9000; Editor or gfx build, not
+`-nographics`) with the eval's own world config (`world_config_file`, else the
+def's final-stage world) and the snapshot keys (`ratsim/world_snapshot.py`,
+`WorldSnapshot.cs`), and writes `<exp_dir>/snapshots/seed<seed>_<view>.png` +
+`.json`, indexed in the manifest under `snapshots[seed][view]`. `--out DIR`
+writes `<exp>_seed<seed>_<view>.png` there instead, with no manifest — the paper
+"here is the environment" figure. `--width`, `--set margin=0.05`,
+`--set background=skybox`, `--set show_agent=1` pass `world_snapshot/*` keys.
+
+Underneath, the flags the scripts use are also available by hand:
+
+| Producer | Flag | Files |
+|---|---|---|
+| `eval_one_run.py`, `eval_one_run_dreamer.py` | `--record-trajectories` | `<run_dir>/eval_episodes[_ablated]_trajectories/env0_ep<i>.npz`, plus `eval_world_config.json` (resolved world config, difficulty baked in — always written) |
+| `analyze_experiment.py --run-eval N` | `--record-trajectories` | forwards to both eval scripts |
+| `test.py` (RL / human / frontier) | `record_trajectories=1` | `<results_dir>/trajectories/<method>_seed<S>_ep<i>.npz`, `eval_world_config_stage<k>.json` |
+
+`test.py def=` accepts experiment defs from `defs/` or an `experiment.yaml`
+snapshot (world = the def's final stage; `variation=`, `difficulty=D`), plus
+`results_dir=<path>`, and forwards `frontier.<key>=<value>` to the launch file
+(recorded per line as `method_params`). The bridge writes the frontier npz
+itself via its `trajectory_dir` parameter — colcon rebuild after bridge edits.
+
 ### Human evaluation
 
 Human control is handled via `/enable_human_control` topic sent to Unity. The core function `ratsim.human_control_test.run_human_session()` manages the sim loop — Python ticks the sim, Unity handles human input, TaskTracker records metrics. test.py imports this for human eval runs.
