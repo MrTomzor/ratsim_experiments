@@ -14,7 +14,12 @@ Walks `<exp_dir>/runs/<variation>__<method>__seed<i>/`, loads each
                              Per-seed lines drawn thin; per-(variation,method)
                              mean drawn bold. Wrapper-added fields like
                              `difficulty` (adaptive defs) are plotted too
-                             whenever any run's JSONL carries them.
+                             whenever any run's JSONL carries them. Any
+                             external baseline under `<exp_dir>/external/
+                             <method>/episodes.jsonl` (human / frontier, as
+                             written by record_trajectories.py or test.py
+                             `results_dir=`) is drawn as a horizontal line at
+                             its mean with a +/-1 std band.
   - `eval_<metric>.png`    — bar chart per metric, x-axis grouped by method,
                              bars colored per variation, error bars = std
                              across per-seed means (RL-paper standard).
@@ -187,21 +192,24 @@ def _add_cum_steps(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def plot_training_curve(runs: list[dict], metric: str, rolling: int,
-                        out_dir: Path) -> None:
-    """One image per metric, rolling mean vs cum_steps. Per-seed thin lines +
-    per-(variation, method) mean bold line, with the mean computed on a shared
-    interpolated x-grid (since seeds don't end at the same cum_steps)."""
+def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
+                        var_color: dict | None = None,
+                        meth_style: dict | None = None) -> bool:
+    """Paint rolling-mean training curves for one metric onto `ax`.
+
+    Per-seed lines drawn thin; per-(variation, method) mean drawn bold, with
+    the mean computed on a shared interpolated x-grid (seeds don't end at the
+    same cum_steps). Returns False (and draws nothing) when no run carries the
+    metric. `var_color` / `meth_style` let a caller keep colours consistent
+    across several axes; by default they are derived from `runs`."""
     have = [r for r in runs if r["train_df"] is not None
-            and metric in r["train_df"].columns]
+            and metric in r["train_df"].columns
+            and r["train_df"][metric].notna().any()]
     if not have:
-        print(f"  -> skipping train_{metric}: no data")
-        return
+        return False
 
-    var_color = variation_colors([r["variation"] for r in have])
-    meth_style = method_linestyles([r["method"] for r in have])
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
+    var_color = var_color or variation_colors([r["variation"] for r in have])
+    meth_style = meth_style or method_linestyles([r["method"] for r in have])
 
     for r in have:
         df = _add_cum_steps(r["train_df"])
@@ -235,14 +243,101 @@ def plot_training_curve(runs: list[dict], metric: str, rolling: int,
 
     ax.set_xlabel("cumulative env steps")
     ax.set_ylabel(f"{metric} (rolling mean, w={rolling})")
+    ax.grid(True, alpha=0.3)
+    return True
+
+
+def plot_training_curve(runs: list[dict], metric: str, rolling: int,
+                        out_dir: Path,
+                        baselines: list[dict] | None = None) -> None:
+    """One image per metric: `draw_training_curve` plus, for the score-like
+    metrics, horizontal lines for any external baselines (human / frontier
+    eval episodes under `<exp_dir>/external/`, see `load_external_baselines`)."""
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    if not draw_training_curve(ax, runs, metric, rolling):
+        plt.close(fig)
+        print(f"  -> skipping train_{metric}: no data")
+        return
+    if baselines and metric not in OPTIONAL_TRAIN_METRICS:
+        draw_baselines(ax, baselines, metric)
     ax.set_title(f"Training: {metric}")
     ax.legend(fontsize=8, loc="best")
-    ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path = out_dir / f"train_{metric}.png"
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"  -> {out_path}")
+
+
+# -- External baselines (human / frontier) ---------------------------------
+
+# Colours for the horizontal baseline lines; deliberately outside tab10, which
+# `variation_colors` hands to the RL curves, so a baseline never looks like a
+# variation. Unknown external methods fall back to a grey.
+BASELINE_COLORS = {"human": "black", "frontier": "dimgray"}
+BASELINE_STYLES = {"human": "-", "frontier": "--"}
+
+
+def load_external_baselines(exp_dir: Path) -> list[dict]:
+    """Episodes of non-RL methods evaluated on this experiment's world, as
+    written by `test.py ... results_dir=<exp_dir>/external/<method>/` (which
+    is what `record_trajectories.py --methods frontier,human` runs). One dict
+    per method: `method`, `df` (all episodes, method-invariant schema), `n`,
+    `difficulty` (the fixed rung the eval was pinned at, from eval_config.json;
+    None for non-adaptive defs or an unpinned eval). Empty list when there is
+    no `external/` dir."""
+    ext = exp_dir / "external"
+    if not ext.is_dir():
+        return []
+    out = []
+    for mdir in sorted(ext.iterdir()):
+        if not mdir.is_dir():
+            continue
+        df = load_jsonl(mdir / "episodes.jsonl")
+        if df is None:
+            continue
+        difficulty = None
+        cfg = mdir / "eval_config.json"
+        if cfg.exists():
+            try:
+                difficulty = json.loads(cfg.read_text()).get("difficulty")
+            except ValueError:
+                pass
+        if "difficulty" in df.columns and df["difficulty"].notna().any():
+            difficulty = float(df["difficulty"].dropna().iloc[-1])
+        out.append({"method": mdir.name, "df": df, "n": len(df),
+                    "difficulty": difficulty})
+    return out
+
+
+def baseline_label(b: dict) -> str:
+    """`frontier (eval, n=10, d=1.00)`; a hand-typed value (plot_training_grid
+    --baseline) is marked `(manual)` so it can't pass for measured data."""
+    if b.get("manual"):
+        return f"{b['method']} (manual)"
+    d = "" if b.get("difficulty") is None else f", d={b['difficulty']:.2f}"
+    return f"{b['method']} (eval, n={b['n']}{d})"
+
+
+def draw_baselines(ax, baselines: list[dict], metric: str) -> None:
+    """Horizontal line at each external method's mean `metric`, with a faint
+    band of +/- one std across its episodes (no band for n=1). Labels carry
+    the episode count and, for adaptive defs, the difficulty rung, so the
+    figure says what the line is worth."""
+    for b in baselines:
+        if metric not in b["df"].columns:
+            continue
+        vals = b["df"][metric].dropna().to_numpy(dtype=float)
+        if len(vals) == 0:
+            continue
+        color = BASELINE_COLORS.get(b["method"], "gray")
+        style = BASELINE_STYLES.get(b["method"], "-.")
+        mean = float(vals.mean())
+        ax.axhline(mean, color=color, linestyle=style, lw=1.6,
+                   label=baseline_label(b))
+        if len(vals) > 1:
+            std = float(vals.std(ddof=1))
+            ax.axhspan(mean - std, mean + std, color=color, alpha=0.08, lw=0)
 
 
 def plot_eval_bar(runs: list[dict], metric: str, out_dir: Path) -> None:
@@ -622,12 +717,14 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nPlots -> {out_dir}/")
 
+    baselines = load_external_baselines(exp_dir)
+    if baselines:
+        print("  external baselines: "
+              + ", ".join(baseline_label(b) for b in baselines))
     for m in TRAIN_METRICS:
-        plot_training_curve(runs, m, args.rolling, out_dir)
+        plot_training_curve(runs, m, args.rolling, out_dir, baselines)
     for m in OPTIONAL_TRAIN_METRICS:
-        if any(r["train_df"] is not None and m in r["train_df"].columns
-               and r["train_df"][m].notna().any() for r in runs):
-            plot_training_curve(runs, m, args.rolling, out_dir)
+        plot_training_curve(runs, m, args.rolling, out_dir)
 
     if n_eval:
         for m in EVAL_METRICS:
