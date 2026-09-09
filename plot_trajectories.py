@@ -9,7 +9,8 @@ manifest under `snapshots`).
 
     python plot_trajectories.py memory_3malls memory_orthomaze
     python plot_trajectories.py memory_3malls memory_orthomaze --methods ppo,dreamer,frontier,human
-    python plot_trajectories.py memory_3malls memory_orthomaze --overlay --colour-by-time
+    python plot_trajectories.py memory_3malls memory_orthomaze --background ortho --cmap viridis   # coloured by step
+    python plot_trajectories.py memory_3malls memory_orthomaze --background ortho --bw --cmap plasma
     python plot_trajectories.py memory_3malls --out results/analysis/paper --name fig3
     python plot_trajectories.py memory_3malls memory_orthomaze --show     # open the PNG when done
     python plot_trajectories.py memory_3malls --background ortho            # on the rendered world
@@ -19,8 +20,9 @@ Rows follow the experiment order given; an experiment recorded with
 order (default: every method any manifest has, in first-seen order). A panel
 without data says so instead of failing.
 
-Output: <out>/trajectories_<layout>[_<view>][_<name>].png, default out =
-results/analysis/. Needs matplotlib (sb3 venv).
+Output: <out>/trajectories_<layout>[_<view>][_bw][_<cmap>][_<name>].png, default out =
+results/analysis/<exp1>+<exp2>+.../ (one folder per set of experiments, so
+figures of different sets never overwrite each other). Needs matplotlib (sb3 venv).
 """
 from __future__ import annotations
 
@@ -93,7 +95,7 @@ def panel_title(t: dict, label: str) -> str:
 _BG_CACHE: dict = {}
 
 
-def row_background(row: dict, view: str | None) -> tuple:
+def row_background(row: dict, view: str | None, bw: bool = False) -> tuple:
     """(image, view_proj) of the row's snapshot in `view`, or (None, None) with a warning."""
     if not view:
         return None, None
@@ -104,6 +106,9 @@ def row_background(row: dict, view: str | None) -> tuple:
         return None, None
     if png not in _BG_CACHE:
         image, meta = load_snapshot(png)
+        if bw:
+            grey = (0.299 * image[..., 0] + 0.587 * image[..., 1] + 0.114 * image[..., 2])
+            image = np.repeat(grey.astype(np.uint8)[..., None], 3, axis=2)
         _BG_CACHE[png] = (image, meta["view_proj"])
     return _BG_CACHE[png]
 
@@ -116,6 +121,18 @@ def row_label(row: dict) -> str:
 #  Figures
 # ─────────────────────────────────────────────
 
+def row_max_step(row, labels) -> int:
+    """Longest episode (in steps) among the row's trajectories: the row's colour scale."""
+    hi = 1
+    for label in labels:
+        npz = row["cells"].get(label)
+        if npz is not None:
+            steps = load_trajectory(npz)["steps"]
+            if len(steps):
+                hi = max(hi, int(steps[-1]))
+    return hi
+
+
 def draw_grid(rows, labels, args, out: Path) -> Path:
     n_rows, n_cols = len(rows), len(labels)
     fig, axes = plt.subplots(n_rows, n_cols,
@@ -123,7 +140,10 @@ def draw_grid(rows, labels, args, out: Path) -> Path:
                              squeeze=False)
     colors = dict(zip(labels, default_colors(len(labels))))
     for r, row in enumerate(rows):
-        bg, vp = row_background(row, args.background)
+        bg, vp = row_background(row, args.background, args.bw)
+        # Colour scale per row: 0 = start, 1 = the longest episode of THIS world.
+        row_max = row_max_step(row, labels) if args.colour_by_time else None
+        trange = (0, row_max) if args.colour_by_time else None
         for c, label in enumerate(labels):
             ax = axes[r][c]
             npz = row["cells"].get(label)
@@ -140,18 +160,33 @@ def draw_grid(rows, labels, args, out: Path) -> Path:
             plot_trajectories(ax, [{"xyz": t["xyz"], "steps": t["steps"],
                                     "pickup_steps": t["pickup_steps"], "color": colors[label]}],
                               world_bounds=world_bounds_of(t), background=bg, view_proj=vp,
-                              colour_by_time=args.colour_by_time, subsample=args.subsample,
+                              colour_by_time=args.colour_by_time, cmap=args.cmap,
+                              time_range=trange, subsample=args.subsample,
                               show_pickups=not args.no_pickups, linewidth=args.linewidth,
                               title=panel_title(t, label))
             if c > 0:
                 ax.set_ylabel("")
             if r < n_rows - 1:
                 ax.set_xlabel("")
-        axes[r][0].set_ylabel(row_label(row) if bg is not None
-                              else f"{row_label(row)}\nz (Unity, m)")
+        ylab = row_label(row)
+        if args.colour_by_time:
+            ylab += f"\n(1.0 = {row_max} steps)"
+        axes[r][0].set_ylabel(ylab if bg is not None else f"{ylab}\nz (Unity, m)")
     if args.title:
         fig.suptitle(args.title, y=1.0)
     fig.tight_layout()
+    if args.colour_by_time:
+        # One colourbar in normalised time; each row's label says what 1.0 is in steps.
+        import matplotlib as mpl
+        cax = fig.add_axes([0.0, 0.0, 0.01, 0.1])   # placed below after layout
+        fig.canvas.draw()
+        right = max(ax.get_position().x1 for ax in axes.flat)
+        top = max(ax.get_position().y1 for ax in axes.flat)
+        bottom = min(ax.get_position().y0 for ax in axes.flat)
+        cax.set_position([right + 0.012, bottom, 0.012, top - bottom])
+        sm = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(0, 1), cmap=args.cmap)
+        cb = fig.colorbar(sm, cax=cax)
+        cb.set_label("time  (0 = start, 1 = longest episode of the row)")
     fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig)
     return out
@@ -177,7 +212,7 @@ def draw_overlay(rows, labels, args, out: Path) -> Path:
             items.append({"xyz": t["xyz"], "steps": t["steps"],
                           "pickup_steps": t["pickup_steps"], "color": colors[label],
                           "label": label})
-        bg, vp = row_background(row, args.background)
+        bg, vp = row_background(row, args.background, args.bw)
         plot_trajectories(ax, items, world_bounds=bounds, background=bg, view_proj=vp,
                           subsample=args.subsample, show_pickups=not args.no_pickups,
                           alpha=0.8, linewidth=args.linewidth, legend=True,
@@ -205,7 +240,15 @@ def main() -> None:
     ap.add_argument("--overlay", action="store_true",
                     help="one panel per row with all methods overlaid, instead of the grid")
     ap.add_argument("--overlay-cols", type=int, default=2)
-    ap.add_argument("--colour-by-time", action="store_true", dest="colour_by_time")
+    ap.add_argument("--cmap", default=None, metavar="CMAP",
+                    help="grid: colour each trajectory by step through this matplotlib colormap "
+                         "(viridis, plasma, inferno, magma, cividis, turbo, ...); the scale is "
+                         "per row: 0 = start, 1 = the row's longest episode (steps in the row "
+                         "label), with one normalised colourbar; start = "
+                         "white circle, end = black square, pickups = stars in the step's colour. "
+                         "Without it every method has one colour.")
+    ap.add_argument("--bw", action="store_true",
+                    help="draw the --background snapshot in black and white")
     ap.add_argument("--subsample", type=int, default=1, help="keep every k-th pose")
     ap.add_argument("--no-pickups", action="store_true", dest="no_pickups")
     ap.add_argument("--background", default=None, choices=["ortho", "persp"],
@@ -223,6 +266,7 @@ def main() -> None:
                     help="look experiment ids up under results/experiments instead of the "
                          "default results/rci (same as record_trajectories.py --local)")
     args = ap.parse_args()
+    args.colour_by_time = args.cmap is not None
 
     rows = load_rows(args.exps, "local" if args.local else "rci")
     if not rows:
@@ -244,9 +288,17 @@ def main() -> None:
 
     print(f"Rows:    {[row_label(r).replace(chr(10), ' ') for r in rows]}")
     print(f"Columns: {labels}")
-    out_dir = Path(args.out) if args.out else Path(__file__).parent / "results" / "analysis"
+    exp_names = []
+    for r in rows:
+        if r["exp"] not in exp_names:
+            exp_names.append(r["exp"])
+    out_dir = (Path(args.out) if args.out
+               else Path(__file__).parent / "results" / "analysis" / "+".join(exp_names))
     out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = (f"_{args.background}" if args.background else "") + (f"_{args.name}" if args.name else "")
+    suffix = ((f"_{args.background}" if args.background else "")
+              + ("_bw" if args.bw and args.background else "")
+              + (f"_{args.cmap}" if args.colour_by_time and not args.overlay else "")
+              + (f"_{args.name}" if args.name else ""))
     layout = "overlay" if args.overlay else "grid"
     out = out_dir / f"trajectories_{layout}{suffix}.png"
     (draw_overlay if args.overlay else draw_grid)(rows, labels, args, out)

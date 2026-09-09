@@ -392,7 +392,14 @@ sourced in that shell; human needs the keyboard.
 
 `plot_trajectories.py` draws the manifests in the order given, rows = experiments
 (N rows each if recorded with `--n-worldseeds N`), columns = methods, to
-`results/analysis/trajectories_<grid|overlay>[_<view>][_<name>].png`. Drawing lives in
+`results/analysis/<exp1>+<exp2>+.../trajectories_<grid|overlay>[_<view>][_bw][_<cmap>][_<name>].png`
+(a folder per set of experiments, so different sets never overwrite each other; `--out`
+overrides). `--cmap viridis` (grid only) colours each trajectory by step through that
+colormap, scaled per row: 0 = start, 1 = that world's longest episode (the step count is
+in the row label; one normalised colourbar at the right; start = white circle, end = black
+square, pickups = stars in their step's colour) instead
+of one colour per method; `--bw` draws the background snapshot in black and white so the
+coloured lines stand out. Drawing lives in
 `ratsim/ratsim_vis/trajectory_plot.py`: on a blank slate in Unity top-down frame
 (x right, z up), or with `--background ortho|persp` on the rendered world
 snapshot of that view (both straight down: orthographic camera = true map,
