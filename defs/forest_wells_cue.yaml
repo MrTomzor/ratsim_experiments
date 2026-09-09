@@ -8,7 +8,7 @@
 
 agent_preset: sphereagent_2d_lidar_wells_cue
 task_preset: volumetric_exploration_4000_collision_penalty
-world_preset: forest_landmark_wells
+world_preset: forest_landmarks_wells
 
 total_steps: 6_000_000
 n_stages: 20
