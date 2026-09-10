@@ -9,6 +9,7 @@ manifest `<exp_dir>/trajectories.json` that plot_trajectories.py reads.
     python record_trajectories.py memory_3malls memory_orthomaze --methods ppo,dreamer,frontier
     python record_trajectories.py memory_3malls memory_orthomaze --methods human      # later, at the keyboard
     python record_trajectories.py memory_3malls --methods ppo --n-worldseeds 2 --run-seed 0 --difficulty 0.5
+    python record_trajectories.py <ladder_def> --methods dreamer --columns variation --difficulty 0.5
     python record_trajectories.py memory_3malls --methods ppo --snapshot ortho   # + overhead pictures
     python plot_trajectories.py memory_3malls memory_orthomaze [--background ortho]
 
@@ -177,6 +178,9 @@ def run(cmd: list[str], dry: bool) -> int:
 
 def record_rl(exp_dir: Path, method: str, args, rng: random.Random,
               man: dict) -> bool:
+    """One manifest column per method (default), or one per variation of the
+    method with --columns variation (a ladder def: same method, several
+    variations). Returns True if every column it tried succeeded."""
     runs = completed_runs(exp_dir, method)
     if not runs:
         print(f"  [skip] {method}: no run with a finished checkpoint under {exp_dir / 'runs'}")
@@ -188,8 +192,23 @@ def record_rl(exp_dir: Path, method: str, args, rng: random.Random,
             return False
     if args.variation:
         runs = [r for r in runs if r["variation"] == args.variation] or runs
+    if args.columns == "variation":
+        variations = []
+        for r in runs:
+            if r["variation"] not in variations:
+                variations.append(r["variation"])
+        ok = True
+        for var in variations:
+            pool = [r for r in runs if r["variation"] == var]
+            ok &= _record_one_rl(exp_dir, method, pool, var, args, rng, man)
+        return ok
+    return _record_one_rl(exp_dir, method, runs, method, args, rng, man)
+
+
+def _record_one_rl(exp_dir: Path, method: str, runs: list[dict], column: str, args,
+                   rng: random.Random, man: dict) -> bool:
     chosen = rng.choice(runs)
-    print(f"  {method}: run {chosen['run_id']} "
+    print(f"  {column}: run {chosen['run_id']} "
           f"({'pinned' if args.run_seed is not None else 'random pick'} of {len(runs)})")
     try:
         python = python_for_method(method)
@@ -227,8 +246,8 @@ def record_rl(exp_dir: Path, method: str, args, rng: random.Random,
     wc = chosen["run_dir"] / "eval_world_config.json"
     if wc.exists():
         man["world_config_file"] = str(wc)
-    man["methods"][method] = {
-        "run_id": chosen["run_id"], "run_seed": chosen["seed"],
+    man["methods"][column] = {
+        "method": method, "run_id": chosen["run_id"], "run_seed": chosen["seed"],
         "variation": chosen["variation"], "kind": "rl",
         "eval_metaseed": args.eval_metaseed, "difficulty": args.difficulty,
         "episodes": eps,
@@ -336,6 +355,10 @@ def main() -> None:
     ap.add_argument("--rng-seed", type=int, default=None, dest="rng_seed",
                     help="seed for the random pick, to make it repeatable")
     ap.add_argument("--variation", default=None, help="prefer runs of this variation")
+    ap.add_argument("--columns", choices=["method", "variation"], default="method",
+                    help="what a manifest column (figure column) is for RL methods: one per "
+                         "method (default) or one per variation of each method — for a ladder "
+                         "def where one method has several variations")
     ap.add_argument("--eval-metaseed", type=int, default=42, dest="eval_metaseed")
     ap.add_argument("--difficulty", type=float, default=None)
     ap.add_argument("--deterministic", action="store_true")

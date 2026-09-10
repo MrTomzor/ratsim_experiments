@@ -116,6 +116,32 @@ at the mirror:
 No `--run-eval` means it only reads the jsonls — no Unity, no venv subprocesses. PNGs land
 in `results/rci/<exp_id>/analysis/`.
 
+**Human / frontier baselines on the training curves.** Anything under
+`<exp_dir>/external/<method>/episodes.jsonl` — what `record_trajectories.py --methods
+frontier,human` writes, or `test.py ... results_dir=<exp_dir>/external/<method>` directly —
+is drawn on `train_total_score.png` / `train_objects_found.png` as a horizontal line at the
+mean over its episodes with a ±1 std band. The legend carries `n=` and, for adaptive defs,
+the `d=` rung the baseline was pinned at (from `eval_config.json`), because the training
+curve is measured at a moving difficulty while the baseline sits at one rung. The default
+`--n-worldseeds 1` of the trajectory script gives an n=1 line; record more seeds for a
+baseline worth reading (`--n-worldseeds 10` is cheap for frontier). `test.py` appends, so
+later runs into the same `external/<method>/` grow the sample.
+
+**Several defs side by side** — `plot_training_grid.py` lays out columns = experiments,
+rows = score / pickups / difficulty (the last only when any run carries it), each panel
+drawn by the same `draw_training_curve` / `draw_baselines` the single-experiment analyzer
+uses, so the two never disagree. Ids resolve under `results/rci/` (`--local` for
+`results/experiments/`), output to `results/analysis/<exp1>+<exp2>+.../training_grid.png`:
+
+```bash
+~/ratvenv/venv/bin/python plot_training_grid.py memory_orthomaze memory_3malls memory_fencemaze
+~/ratvenv/venv/bin/python plot_training_grid.py memory_3malls memory_fencemaze --name mazes \
+    --rolling 100 --methods ppo,dreamer --variations baseline,consec4 --sharey
+# no external data yet for a def: hand-typed line, labelled "(manual)" on the figure
+~/ratvenv/venv/bin/python plot_training_grid.py memory_dynahouses \
+    --baseline memory_dynahouses:human=1100 --baseline memory_dynahouses:human.objects_found=18
+```
+
 ### Experiment tracking (Weights & Biases)
 
 `wandb_integration.py` adds W&B as an **extra sink alongside TensorBoard**, not a
@@ -385,7 +411,9 @@ run per RL method (random among runs with a finished stage; `--run-seed N` /
 JSONL, and then runs frontier / human through `test.py` on exactly those seeds
 (`eval_seeds=…`, output in `<exp_dir>/external/<method>/`). Re-running with
 other `--methods` adds columns to the same manifest. `--difficulty`,
-`--eval-metaseed`, `--spawn-unity`, `--method-arg frontier.grid_resolution=0.5`
+`--eval-metaseed`, `--spawn-unity`, `--columns variation` (one column per variation of
+the method instead of one per method — ladder defs; pin `--difficulty D` for an adaptive
+def so every column lands on the same world), `--method-arg frontier.grid_resolution=0.5`
 (forwarded verbatim to the ROS2 launch), `--no-run` (re-index existing
 external output without running), `--local`, `--dry-run`. Frontier needs ROS
 sourced in that shell; human needs the keyboard.
@@ -443,8 +471,9 @@ ratsim_experiments/
 ├── train_dreamerv3.py       # Train DreamerV3 (separate venv — jax/embodied)
 ├── test.py                  # Evaluate a method on a run definition (RL, human, etc.)
 ├── analyze_run_data.py      # Load train_episodes.jsonl(s) → tables + plots
-├── analyze_experiment.py    # Scheduler-experiment analyzer: train curves +
-│                            #   eval bar charts + memory-ablation plot
+├── analyze_experiment.py    # Scheduler-experiment analyzer: train curves (+ human /
+│                            #   frontier baseline lines) + eval bar charts + ablation plot
+├── plot_training_grid.py    # Train curves of several experiments side by side
 ├── eval_one_run.py          # Per-run eval helper for SB3 (PPO / RecurrentPPO)
 ├── eval_one_run_dreamer.py  # Per-run eval helper for DreamerV3 (embodied venv)
 ├── pull_run.sh              # Pull an experiment from the RCI cluster (-t train
