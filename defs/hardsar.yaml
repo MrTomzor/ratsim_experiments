@@ -10,8 +10,8 @@ agent_preset: sphereagent_2d_dynasar
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: superdyna_houses
 
-total_steps: 6_000_000
-n_stages: 20
+total_steps: 9_000_000
+n_stages: 30
 mode: dfs
 
 methods:
