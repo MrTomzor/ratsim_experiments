@@ -1,0 +1,36 @@
+# Wells alternation in the orthogonal maze, NO curriculum: the paper-table
+# "4arm-submazes-foraging" row. PPO vs Dreamer, same shape as wellmaze_tight_cue
+# and forest_wells_cue so the three foraging rows share one recipe.
+#
+# World = maze_ortho_wells_nohomeprime at its base values, which ARE the hardest
+# rung (d=1) of ortho_wells_adaptive_nohomeprime: 200x200, 19 rooms, cue range
+# 300. Same geometry as maze_sectored_orthogonal (memory_orthomaze), plus the
+# wells + Home/Random scheduler. Faithful Widloski variant: prime_home_reward=0
+# in the preset (session opens with the LED / Random trial, no freebie Home
+# dispense), agent spawns at Home.
+#
+# A ladder run evaluated with `--difficulty 1.0` resolves to this exact world
+# config, so curriculum-trained cells are directly comparable to these.
+#
+# Task horizon 5000 (as memory_orthomaze on the same maze) so an episode fits
+# several Random->Home cycles at full size. Dreamer runs the default size12m.
+#
+# Cardinality: 1 variation x 2 methods x 3 seeds = 6 runs; 20 stages of 300k.
+# On the cluster this is two jobs (PPO -> CPU, dreamer -> GPU), one exp_id:
+#   ./rci_port_probes/submit.sh ortho_wells_nohomeprime --time 3d
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: volumetric_exploration_2000_collision_penalty
+world_preset: maze_ortho_wells_nohomeprime
+
+# Pin the stage size, state the budget; raising total_steps later appends
+# stages instead of resizing finished ones.
+steps_per_stage: 300_000
+total_steps: 15_000_000
+mode: dfs
+
+methods:
+  - name: ppo
+  - name: dreamer
+
+seeds: 3
