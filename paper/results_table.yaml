@@ -1,0 +1,55 @@
+# Paper results table: which experiments appear, under which names, and what
+# counts as "fully baked". Consumed by make_results_table.py; every CLI flag
+# there overrides the matching key here.
+#
+# Row keys:
+#   label       row name as printed in the paper (free text, LaTeX allowed)
+#   exp         experiment id, looked up under results/rci/<exp> (pull_run.sh -t
+#               mirror) unless `source: local` (results/experiments/<exp>)
+#   variation   run variation to take (default: baseline)
+#   difficulty  pinned difficulty rung the eval must have been run at (adaptive
+#               defs only; evals at another rung do NOT count)
+#   na          methods that don't apply to this row -> plain dash, never red
+#   per_method  {method: {exp, variation, difficulty, source}} overrides for a
+#               method whose runs live in a different experiment
+#
+# Cell status (also the colour in the .tex): eval = black (every expected seed
+# has >= n_eval eval episodes; human/frontier: >= n_eval episodes), train =
+# blue (last train_window training episodes per seed), partial = orange (some
+# eval episodes but fewer than n_eval and no training data to fall back on),
+# missing = red.
+
+out: ~/git/foragers_paper/tables/results.tex
+
+n_eval: 5
+train_window: 100
+eval_metaseed: 42          # eval files from another metaseed don't count
+
+metrics:                   # column pair per method, in this order
+  objects_found: OBJ
+  total_score: Score
+decimals:
+  objects_found: 1
+  total_score: 0
+
+methods:                   # column order, paper header name
+  ppo: PPO
+  dreamer: Dreamer
+  human: Human
+  frontier: Frontier-Explorer
+
+groups:
+  - name: static search
+    rows:
+      - {label: memorymaze15x15,        exp: memorymaze_15x15}
+      - {label: 3buildings,             exp: memory_3malls}
+      - {label: 4arm-submazes,          exp: memory_orthomaze}
+  - name: dynamic search
+    rows:
+      - {label: 5houses-dynamic,        exp: memory_dynahouses_2k}
+      - {label: 5houses-sar,            exp: hardsar}
+  - name: foraging
+    rows:
+      - {label: ratmaze-foraging,       exp: wellmaze_tight_cue,      na: [frontier]}
+      - {label: forest-foraging,        exp: forest_wells_cue,        na: [frontier]}
+      - {label: 4arm-submazes-foraging, exp: ortho_wells_nohomeprime, na: [frontier]}

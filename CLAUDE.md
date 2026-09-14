@@ -142,6 +142,27 @@ uses, so the two never disagree. Ids resolve under `results/rci/` (`--local` for
     --baseline memory_dynahouses:human=1100 --baseline memory_dynahouses:human.objects_found=18
 ```
 
+**Paper results table** — `make_results_table.py` renders the paper's benchmark
+table from whatever is on disk. `paper/results_table.yaml` is the single place
+for which defs appear, under which paper names, in which method columns, and
+the `n_eval` threshold for "fully baked". Per cell it takes held-out eval
+(`eval_episodes.jsonl` on every expected seed with ≥ n_eval episodes, or
+`external/<method>/episodes.jsonl` for human/frontier) → black; else the tail of
+`train_episodes.jsonl` → blue; else partial eval → orange; else red. Writes a
+tabular-only `.tex` (the paper `\input`s it; `\cellTrain` etc. are
+`\providecommand`s so the paper can force black for camera-ready) plus a
+`.status.md`, and prints seeds / steps / eval-episode counts per cell so it is
+obvious what still needs running. `--strict` fails unless every cell is black.
+```bash
+~/ratvenv/venv/bin/python make_results_table.py                 # -> out: in the yaml
+~/ratvenv/venv/bin/python make_results_table.py --n 10 --rows 3buildings --methods ppo,dreamer
+```
+Only the first n_eval eval episodes (by `episode_idx`) of each run are used, so
+all cells score on the same worlds. Beware: `eval_one_run.py` overwrites
+`eval_episodes.jsonl`, and `record_trajectories.py` calls it with
+`--n_episodes = --n-worldseeds` (default 1) — record trajectories with
+`--n-worldseeds ≥ n_eval` or the table drops back to blue.
+
 ### Experiment tracking (Weights & Biases)
 
 `wandb_integration.py` adds W&B as an **extra sink alongside TensorBoard**, not a
