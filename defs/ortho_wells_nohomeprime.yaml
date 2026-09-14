@@ -26,7 +26,7 @@ world_preset: maze_ortho_wells_nohomeprime
 # Pin the stage size, state the budget; raising total_steps later appends
 # stages instead of resizing finished ones.
 steps_per_stage: 300_000
-total_steps: 9_000_000
+total_steps: 15_000_000
 mode: dfs
 
 methods:
