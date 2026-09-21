@@ -92,6 +92,12 @@ Notes:
 `--machine <name>` forces everything into one job; `--only ppo` submits just one
 method's share; `--variations consec4` runs just one cell of a ladder def.
 
+`--after <jobid>[,<jobid>]` queues the submission behind jobs that are still
+running (`--dependency=afterany:`, so a job that hit its time limit counts as
+ended). Use it to line up a 1-day run of a def behind its 4 h taster: the two
+share a state file and must not overlap, and resume picks up where the taster
+stopped. It applies to every job the submission produces.
+
 ## Folder layout
 
 ```

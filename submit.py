@@ -363,6 +363,14 @@ def main():
                    default=USE_DEADLINE,
                    help="Use the *deadline partitions for jobs of at most 1 "
                         f"day (default: {USE_DEADLINE}, set by USE_DEADLINE).")
+    p.add_argument("--after", type=lambda s: [x.strip() for x in s.split(",") if x.strip()],
+                   default=None, metavar="JOBID[,JOBID]",
+                   help="Start only once these SLURM jobs have ended, however "
+                        "they ended (--dependency=afterany: a job killed by "
+                        "its time limit is TIMEOUT, which afterok would wait "
+                        "on forever). For queueing a longer run of a def "
+                        "behind the one still running — the two share a "
+                        "state file and must not overlap.")
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
                    help="Print the sbatch lines without submitting.")
     p.add_argument("--sbatch-script", default=None, dest="sbatch_script",
@@ -420,6 +428,8 @@ def main():
                f"--cpus-per-task={cpus}", f"--mem={job.mem}"]
         if job.gpus:
             cmd.append(f"--gres=gpu:{job.gpus}")
+        if args.after:
+            cmd.append(f"--dependency=afterany:{':'.join(args.after)}")
         cmd += [str(script), args.exp, "--machine", job.machine["_name"]]
         if job.emit_filter:
             cmd += ["--methods", ",".join(job.methods)]
@@ -455,6 +465,10 @@ def main():
                    f"{CAPS['fast']['cpus']} CPUs) or ")
         print(f"      Over the cap the extra job PENDS indefinitely with no "
               f"error. Consider {shorter}submitting halves with --only.")
+
+    if args.after and not all(j.isdigit() for j in args.after):
+        raise SystemExit(f"[submit] --after takes numeric SLURM job ids, got "
+                         f"{','.join(args.after)}")
 
     if args.dry_run:
         print("\n--dry-run, not submitting:")
