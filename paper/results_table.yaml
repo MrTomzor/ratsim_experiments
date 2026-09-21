@@ -20,6 +20,7 @@
 # missing = red.
 
 out: ~/git/foragers_paper/tables/results.tex
+figures_out: ~/git/foragers_paper/fig   # make_world_figure.py output dir
 
 n_eval: 5
 train_window: 100
@@ -51,5 +52,5 @@ groups:
   - name: foraging
     rows:
       - {label: ratmaze-foraging,       exp: wellmaze_tight_cue,      na: [frontier]}
-      - {label: forest-foraging,        exp: forest_wells_cue,        na: [frontier]}
+      - {label: forest-foraging,        exp: forest_wells_cue_nopose,        na: [frontier]}
       - {label: 4arm-submazes-foraging, exp: ortho_wells_nohomeprime, na: [frontier]}

@@ -163,6 +163,25 @@ all cells score on the same worlds. Beware: `eval_one_run.py` overwrites
 `--n_episodes = --n-worldseeds` (default 1) — record trajectories with
 `--n-worldseeds ≥ n_eval` or the table drops back to blue.
 
+**Paper world figures** — `make_world_figure.py` composes overhead snapshots of
+the eval worlds into one figure (PNG + PDF). `worlds` takes the rows of
+`paper/results_table.yaml` (same order / labels / groups as the table) and the
+first N eval worlds of each (replays the eval env's `default_rng(eval_metaseed)`
+draw, minus the warm-up draw, so column k is the k-th eval world in every row);
+`difficulty` renders K rungs of an adaptive def at one shared metre scale so the
+growth with d is visible. Tiles are fetched once through `ratsim.world_snapshot`
+(Editor / gfx build in Play mode on :9000) into
+`results/analysis/paper/snapshots/` and reused after that (`--no-fetch` = cache
+only, `--refresh` = re-render); output goes to `figures_out:` in the yaml.
+Between worlds it reloads the scene (`scene_select`): Unity's
+`WorldLoadingController.LoadConfig` merges configs into its param table and never
+clears it, so without the reload a maze's walls or the previous world's wells leak
+into the next world (measured 2026-09-14 — the 3malls row rendered as a labyrinth).
+```bash
+~/ratvenv/venv/bin/python make_world_figure.py worlds --seeds-per-world 4        # 8 rows x 4 cols
+~/ratvenv/venv/bin/python make_world_figure.py difficulty --def ortho_wells_adaptive_nohomeprime --n 6
+```
+
 ### Experiment tracking (Weights & Biases)
 
 `wandb_integration.py` adds W&B as an **extra sink alongside TensorBoard**, not a

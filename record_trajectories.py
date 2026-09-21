@@ -237,12 +237,15 @@ def _record_one_rl(exp_dir: Path, method: str, runs: list[dict], column: str, ar
         print(f"  [fail] {method}: no trajectory_file in eval_episodes.jsonl")
         return False
     seeds = [e["world_seed"] for e in eps]
-    if man["world_seeds"] and man["world_seeds"][: len(seeds)] != seeds:
+    old = man["world_seeds"]
+    if seeds[: len(old)] == old:
+        # Same eval sequence, as many or more worlds: grow the manifest's rows.
+        if len(seeds) > len(old):
+            man["world_seeds"] = seeds
+    elif old[: len(seeds)] != seeds:
         print(f"  [warn] {method}: world seeds {seeds} differ from manifest "
-              f"{man['world_seeds']} — different eval metaseed/difficulty? "
+              f"{old} — different eval metaseed/difficulty? "
               f"Manifest keeps the earlier ones; this column will not line up.")
-    elif not man["world_seeds"]:
-        man["world_seeds"] = seeds
     wc = chosen["run_dir"] / "eval_world_config.json"
     if wc.exists():
         man["world_config_file"] = str(wc)

@@ -33,9 +33,13 @@ pulls it in with \\input), a status markdown next to it, and prints the same
 status to the console: seeds present / expected, training steps done / target,
 eval episodes per seed, so it is obvious what still needs baking.
 
+The mean is always typeset black; only the \\pm std subscript is coloured, so a
+cell's provenance is visible without making the number itself hard to read.
+
 The .tex defines \\cellEval, \\cellTrain, \\cellPartial, \\cellMissing, \\cellNA
-with \\providecommand -- define them in the paper BEFORE the \\input to
-override (e.g. all black for camera-ready).
+with \\providecommand (the first three wrap the subscript, in math mode) --
+define them in the paper BEFORE the \\input to override (e.g. all black for
+camera-ready).
 
 Gotcha: eval_one_run.py OVERWRITES eval_episodes.jsonl, and
 record_trajectories.py calls it with --n_episodes = --n-worldseeds (default
@@ -192,6 +196,11 @@ def first_n(df: pd.DataFrame, n: int) -> pd.DataFrame:
     return df.head(n)
 
 
+def pooled_episodes(dfs: list[pd.DataFrame], metric: str) -> list[float]:
+    """Every episode's value, all seeds together (one sample per world x seed)."""
+    return [float(v) for df in dfs for v in df[metric]]
+
+
 def fmt_steps(v: int | None) -> str:
     if v is None:
         return "?"
@@ -203,14 +212,22 @@ def fmt_steps(v: int | None) -> str:
 # ─────────────────────────────────────────────
 
 def agg(values: list[float]) -> tuple[float, float]:
+    """(mean, std) of the per-seed (RL) or per-episode (human / frontier)
+    samples; the cell keeps the samples too, under `samples`, for
+    make_final_boxplots.py."""
     arr = np.asarray(values, dtype=float)
     std = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
     return float(arr.mean()), std
 
 
-def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> dict:
+def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
+                    eval_only: bool = False) -> dict:
+    """eval_only (make_final_boxplots.py): never fall back to training data; the
+    samples are the individual eval episodes (first n_eval) pooled over every seed
+    with a complete, provenance-checked eval -- spread across worlds, not seeds.
+    Status `eval` when that is every expected seed, `partial` when only some."""
     n_eval, window = cfg["n_eval"], cfg["train_window"]
-    out = {"status": "missing", "values": {}, "seeds": "0/?", "steps": "-",
+    out = {"status": "missing", "values": {}, "samples": {}, "seeds": "0/?", "steps": "-",
            "eval_eps": "-", "note": ""}
     exp_dir = find_exp_dir(spec["exp"], spec["source"])
     if exp_dir is None:
@@ -272,7 +289,22 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> d
     if len(eval_ok) >= expected and len(eval_ok) == len(runs):
         out["status"] = "eval"
         for m in metrics:
-            out["values"][m] = agg([float(df[m].mean()) for df in eval_ok])
+            out["samples"][m] = (pooled_episodes(eval_ok, m) if eval_only
+                                 else [float(df[m].mean()) for df in eval_ok])
+            out["values"][m] = agg(out["samples"][m])
+        out["note"] = "; ".join(notes)
+        return out
+
+    if eval_only:
+        incomplete = [f"seed{r['seed']}({c})" for r, c in zip(runs, eval_counts) if c < n_eval]
+        if incomplete:
+            notes.insert(0, f"dropped, <{n_eval} eval eps: {', '.join(incomplete)}")
+        if eval_ok:
+            out["status"] = "partial"
+            for m in metrics:
+                out["samples"][m] = pooled_episodes(eval_ok, m)
+                out["values"][m] = agg(out["samples"][m])
+            notes.insert(0, f"eval complete on {len(eval_ok)}/{expected} seeds")
         out["note"] = "; ".join(notes)
         return out
 
@@ -281,7 +313,8 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> d
     if train:
         out["status"] = "train"
         for m in metrics:
-            out["values"][m] = agg([float(df.tail(window)[m].mean()) for df in train])
+            out["samples"][m] = [float(df.tail(window)[m].mean()) for df in train]
+            out["values"][m] = agg(out["samples"][m])
         if any(("difficulty" in df.columns) for df in train):
             ds = [float(df.tail(window)["difficulty"].mean()) for df in train
                   if "difficulty" in df.columns]
@@ -295,7 +328,8 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> d
         out["status"] = "partial"
         pool = [first_n(r["eval_df"], n_eval) for r in runs if r["eval_df"] is not None]
         for m in metrics:
-            out["values"][m] = agg([float(df[m].mean()) for df in pool])
+            out["samples"][m] = [float(df[m].mean()) for df in pool]
+            out["values"][m] = agg(out["samples"][m])
         notes.insert(0, f"eval on {len(eval_ok)}/{expected} seeds, no train data")
     else:
         notes.insert(0, "no train_episodes.jsonl / eval_episodes.jsonl in any run")
@@ -305,7 +339,7 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> d
 
 def resolve_external_cell(spec: dict, method: str, cfg: dict, metrics: list[str]) -> dict:
     n_eval = cfg["n_eval"]
-    out = {"status": "missing", "values": {}, "seeds": "-", "steps": "-",
+    out = {"status": "missing", "values": {}, "samples": {}, "seeds": "-", "steps": "-",
            "eval_eps": "0", "note": ""}
     exp_dir = find_exp_dir(spec["exp"], spec["source"])
     if exp_dir is None:
@@ -336,7 +370,8 @@ def resolve_external_cell(spec: dict, method: str, cfg: dict, metrics: list[str]
     out["eval_eps"] = str(len(df))
     use = first_n(df, n_eval)
     for m in metrics:
-        out["values"][m] = agg(use[m].astype(float).tolist())
+        out["samples"][m] = use[m].astype(float).tolist()
+        out["values"][m] = agg(out["samples"][m])
     if len(df) >= n_eval:
         out["status"] = "eval"
     else:
@@ -349,8 +384,9 @@ def resolve_external_cell(spec: dict, method: str, cfg: dict, metrics: list[str]
 #  Output
 # ─────────────────────────────────────────────
 
-def fmt_value(mean: float, std: float, decimals: int) -> str:
-    return f"${mean:.{decimals}f}_{{\\pm {std:.{decimals}f}}}$"
+def fmt_value(mean: float, std: float, decimals: int, macro: str) -> str:
+    """Mean is always plain (black); only the +-std subscript carries the provenance colour."""
+    return (f"${mean:.{decimals}f}_{{{macro}{{\\pm {std:.{decimals}f}}}}}$")
 
 
 def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[str],
@@ -359,20 +395,25 @@ def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[
     L.append("% AUTO-GENERATED by ratsim_experiments/make_results_table.py -- do not edit;")
     L.append(f"% regenerate with: python make_results_table.py  (n_eval={cfg['n_eval']}, "
              f"train_window={cfg['train_window']})")
-    L.append("% Colours: black = held-out eval, blue = training-episode fallback,")
+    L.append("% Means are always black; the \\pm std subscript carries the provenance")
+    L.append("% colour: black = held-out eval, blue = training-episode fallback,")
     L.append("% orange = partial eval, red = no data. \\newcommand these BEFORE the")
     L.append("% \\input to override (e.g. all black for camera-ready).")
     L.append("\\providecommand{\\cellEval}[1]{#1}")
-    L.append("\\providecommand{\\cellTrain}[1]{\\textcolor{blue}{#1}}")
-    L.append("\\providecommand{\\cellPartial}[1]{\\textcolor{orange}{#1}}")
+    L.append("\\providecommand{\\cellTrain}[1]{{\\color{blue}#1}}")
+    L.append("\\providecommand{\\cellPartial}[1]{{\\color{orange}#1}}")
     L.append("\\providecommand{\\cellMissing}{\\textcolor{red}{--}}")
     L.append("\\providecommand{\\cellNA}{--}")
     ncol = len(methods) * len(metrics)
-    L.append("\\begin{tabular}{l " + " ".join("c" * len(metrics) for _ in methods) + "}")
+    # numbers left-aligned; a vertical rule separates each method's block of metrics
+    L.append("\\begin{tabular}{l " + " | ".join("l" * len(metrics) for _ in methods) + "}")
     L.append("\\toprule")
     head = ["\\multirow{2}{*}{\\textbf{World}}"]
     for m in methods:
-        head.append(f"\\multicolumn{{{len(metrics)}}}{{c}}{{\\textbf{{{cfg['methods'][m]}}}}}")
+        # multicolumn overrides the column spec, so carry the "|" here too
+        bar = "" if m == methods[-1] else "|"
+        head.append(f"\\multicolumn{{{len(metrics)}}}{{c{bar}}}"
+                    f"{{\\textbf{{{cfg['methods'][m]}}}}}")
     L.append(" & ".join(head) + " \\\\")
     rules = []
     for i in range(len(methods)):
@@ -395,8 +436,9 @@ def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[
                         parts.append("\\cellMissing")
                     else:
                         mean, std = c["values"][met]
-                        v = fmt_value(mean, std, int(cfg["decimals"].get(met, 1)))
-                        parts.append(f"{STATUS_MACRO[c['status']]}{{{v}}}")
+                        parts.append(fmt_value(mean, std,
+                                               int(cfg["decimals"].get(met, 1)),
+                                               STATUS_MACRO[c["status"]]))
             L.append(" & ".join(parts) + " \\\\")
     L.append("\\bottomrule")
     L.append("\\end{tabular}")

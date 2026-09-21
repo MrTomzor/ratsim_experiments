@@ -1,0 +1,23 @@
+# wellmaze_tight_cue + a penalty for activating the wrong well.
+#
+# Same world, agent and schedule as wellmaze_tight_cue. The `wrong_well_detection`
+# overlay makes Unity report dwells at a non-target well; the task preset turns the
+# ones on HOME trials (the memory error) into a penalty of 0.5x a correct
+# activation's payout. Tune in the task preset: wrong_well_penalty_fraction,
+# wrong_well_penalty_trials (home | random | both).
+#
+# Playtest:  python test.py def=wellmaze_tight_cue_wrong_well method=human rtf=1.0
+
+agent_preset: sphereagent_2d_lidar_wells_cue
+task_preset: volumetric_exploration_2000_collision_penalty_wrong_well
+world_preset: [widloski_maze_3x3_tight, wrong_well_detection]
+
+total_steps: 6_000_000
+n_stages: 20
+mode: dfs
+
+methods:
+  - name: ppo
+  - name: dreamer
+
+seeds: 3
