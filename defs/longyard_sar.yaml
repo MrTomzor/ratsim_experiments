@@ -1,0 +1,23 @@
+# SAR in long fenced yards: PPO vs Dreamer on longyard_sar.
+#
+# World: 5x2 grid of 56x104 m yards, one collapsed + smoking house_basic per yard (4 rewards
+# each), half the yards also hold trees and walkers (cell types shuffled per seed). See
+# ratsim/config_blender/world_presets/longyard_sar.yaml.
+# Agent and task as in hardsar, except 5000-step episodes (the world is ~298x220 m vs
+# superdyna_houses' 130x130 m).
+#
+# Cardinality: 1 variation × 2 methods × 3 seeds = 6 runs, 30 stages of 300k steps each.
+
+agent_preset: sphereagent_2d_dynasar
+task_preset: volumetric_exploration_5000_collision_penalty
+world_preset: longyard_sar
+
+total_steps: 9_000_000
+n_stages: 30
+mode: dfs
+
+methods:
+  - name: ppo
+  - name: dreamer
+
+seeds: 3
