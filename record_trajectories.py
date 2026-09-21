@@ -19,7 +19,9 @@ same worlds. The seeds are read back from the first RL run's JSONL and
 frontier / human are then run on exactly those seeds through test.py
 (eval_seeds=..., results in <exp_dir>/external/<method>/). If you only ask
 for frontier/human, the seeds come from the existing manifest, or from
---worldseeds.
+--worldseeds. Re-recording a world seed (e.g. `--worldseeds X` after a botched
+human episode) replaces that seed's earlier episodes.jsonl line; the manifest
+keeps every other world.
 
 Experiment ids are looked up under results/rci/<exp> (pull_run.sh mirror; pull
 checkpoints first). --local switches to results/experiments/<exp> (runs trained
@@ -122,6 +124,38 @@ def read_records(jsonl: Path) -> list[dict]:
             except ValueError:
                 continue
     return out
+
+
+def drop_superseded(jsonl: Path, world_seeds: list[int]) -> int:
+    """Keep only the last line per world seed in `world_seeds` (a re-recorded
+    world replaces the earlier episode instead of adding a second sample that the
+    results table / final_boxplots would count). Other lines are untouched.
+    Returns the number of lines dropped."""
+    if not jsonl.exists():
+        return 0
+    lines = jsonl.read_text().splitlines(keepends=True)
+    seeds = {int(s) for s in world_seeds}
+    last: dict[int, int] = {}
+    for i, line in enumerate(lines):
+        try:
+            ws = json.loads(line).get("world_seed")
+        except ValueError:
+            continue
+        if ws is not None and int(ws) in seeds:
+            last[int(ws)] = i
+    keep, dropped = [], 0
+    for i, line in enumerate(lines):
+        try:
+            ws = json.loads(line).get("world_seed")
+        except ValueError:
+            ws = None
+        if ws is not None and int(ws) in seeds and last[int(ws)] != i:
+            dropped += 1
+            continue
+        keep.append(line)
+    if dropped:
+        jsonl.write_text("".join(keep))
+    return dropped
 
 
 def episodes_from_records(recs: list[dict], base: Path,
@@ -298,9 +332,15 @@ def record_external(exp_dir: Path, method: str, args, man: dict,
             return False
         if args.dry_run:
             return True
-    eps = episodes_from_records(read_records(out_dir / "episodes.jsonl"), out_dir, list(seeds))
+        n = drop_superseded(out_dir / "episodes.jsonl", seeds)
+        if n:
+            print(f"  {method}: replaced {n} earlier episode(s) on the re-recorded world seed(s)")
+    # index every manifest world, not just the ones run now, so re-recording one
+    # seed doesn't drop the others from the manifest
+    index = list(man["world_seeds"]) + [s for s in seeds if s not in man["world_seeds"]]
+    eps = episodes_from_records(read_records(out_dir / "episodes.jsonl"), out_dir, index)
     if not eps:
-        eps = episodes_from_npz_dir(out_dir / "trajectories", list(seeds))
+        eps = episodes_from_npz_dir(out_dir / "trajectories", index)
         if eps:
             print(f"  [note] {method}: no episodes.jsonl line for these seeds — "
                   f"indexed {len(eps)} episode(s) from the npz meta instead")
