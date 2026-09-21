@@ -163,6 +163,7 @@ def draw_grid(rows, labels, args, out: Path) -> Path:
                               colour_by_time=args.colour_by_time, cmap=args.cmap,
                               time_range=trange, subsample=args.subsample,
                               show_pickups=not args.no_pickups, linewidth=args.linewidth,
+                              markersize=args.markersize, pickup_size=args.pickup_size,
                               title=panel_title(t, label))
             if c > 0:
                 ax.set_ylabel("")
@@ -216,6 +217,7 @@ def draw_overlay(rows, labels, args, out: Path) -> Path:
         plot_trajectories(ax, items, world_bounds=bounds, background=bg, view_proj=vp,
                           subsample=args.subsample, show_pickups=not args.no_pickups,
                           alpha=0.8, linewidth=args.linewidth, legend=True,
+                          markersize=args.markersize, pickup_size=args.pickup_size,
                           title=row_label(row).replace("\n", " · "))
     for j in range(n, n_rows * n_cols):
         axes[j // n_cols][j % n_cols].axis("off")
@@ -255,6 +257,10 @@ def main() -> None:
                     help="draw on the world snapshot of this view (snapshot_worlds.py / "
                          "record_trajectories.py --snapshot) instead of a blank slate")
     ap.add_argument("--linewidth", type=float, default=1.2)
+    ap.add_argument("--markersize", type=float, default=5.0,
+                    help="start (circle) / end (square) marker size, points")
+    ap.add_argument("--pickup-size", type=float, default=8.0, dest="pickup_size",
+                    help="pickup star size, points")
     ap.add_argument("--panel", type=float, default=4.0, help="panel size in inches")
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--title", default=None)
