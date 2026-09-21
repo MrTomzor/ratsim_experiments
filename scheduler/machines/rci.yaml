@@ -72,6 +72,7 @@ sbatch:
     day: amd                   # 1 day
     long: amdlong              # 3 days
     extralong: amdextralong    # 21 days
+    deadline: amddeadline      # 1 day, deadline-group only (submit.py USE_DEADLINE)
 
 method_profiles:
   ppo:

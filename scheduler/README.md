@@ -72,6 +72,11 @@ Notes:
   beyond → `amdextralong` (GPU equivalents `amdgpu*`). `scheduler_job.sbatch`
   defaults to the 4 h smoke partition, which kills real runs mid-stage — this
   removes that trap.
+- **Deadline mode is on** (`USE_DEADLINE = True` in `submit.py`): anything up to
+  1 day goes to `amddeadline` / `amdgpudeadline` instead — same nodes, higher
+  priority, `deadline` QOS cap of 1000 CPUs / 10 GPUs. Needs membership in the
+  `deadline` group, which is temporary: set it back to `False` after the paper
+  deadline. `--no-deadline` overrides it for one submission.
 - **Resume is the default**, so a 4 h taster you later extend to 3 days costs
   nothing: same exp_id, same `.done` markers, same `wandb_id.txt`, so the W&B
   curves continue rather than restarting.

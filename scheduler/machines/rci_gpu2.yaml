@@ -76,6 +76,7 @@ sbatch:
     day: amdgpu                # 1 day
     long: amdgpulong           # 3 days
     extralong: amdgpuextralong # 21 days
+    deadline: amdgpudeadline   # 1 day, deadline-group only (submit.py USE_DEADLINE)
 
 method_profiles:
   ppo:

@@ -16,7 +16,8 @@ Three jobs this does for you:
 1. **Duration → partition.** `--time 4h` is `amdfast`, `1d` is `amd`, `3d` is
    `amdlong`. Partition names are lookup, not knowledge, and the existing
    scheduler_job.sbatch defaults to the 4 h smoke partition — a trap that kills
-   real runs mid-stage (RCI_CLUSTER_PORT.md §0.1).
+   real runs mid-stage (RCI_CLUSTER_PORT.md §0.1). While `USE_DEADLINE` is on,
+   anything up to 1 day goes to the deadline partitions instead (see below).
 
 2. **Split by hardware class.** A def mixing PPO and dreamer cannot run as one
    job: one scheduler holds one allocation, and rci.yaml has no dreamer profile
@@ -66,7 +67,20 @@ CAPS = {
     "day":       {"cpus": 200, "gpus": 8},
     "long":      {"cpus": 200, "gpus": 6},
     "extralong": {"cpus": 200, "gpus": 8},
+    # `deadline` QOS, read with sacctmgr on 2026-09-21. Shared by all four
+    # *deadline partitions.
+    "deadline":  {"cpus": 1000, "gpus": 10},
 }
+
+# Paper-deadline mode. When on, every job that fits the deadline partitions'
+# 1-day limit goes to the machine config's `deadline:` partition
+# (`amddeadline` / `amdgpudeadline`) instead of its normal tier. Same nodes as
+# amd / amdgpu, priority tier 10 vs 4, preemption off, and the bigger cap
+# above. Access is membership in the `deadline` unix group, which is granted
+# for a deadline and then removed — so flip this back to False afterwards, or
+# every submission gets rejected. `--no-deadline` overrides it per submission.
+USE_DEADLINE = True
+DEADLINE_LIMIT = 24 * 3600
 
 DEFAULT_CPU_MACHINE = "rci"
 # rci_gpu2, not rci_gpu: the 2-card config is the one verified on hardware
@@ -345,6 +359,10 @@ def main():
                         "stages first. Neither is inferred from --time.")
     p.add_argument("--cpu-machine", default=DEFAULT_CPU_MACHINE, dest="cpu_machine")
     p.add_argument("--gpu-machine", default=DEFAULT_GPU_MACHINE, dest="gpu_machine")
+    p.add_argument("--deadline", action=argparse.BooleanOptionalAction,
+                   default=USE_DEADLINE,
+                   help="Use the *deadline partitions for jobs of at most 1 "
+                        f"day (default: {USE_DEADLINE}, set by USE_DEADLINE).")
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
                    help="Print the sbatch lines without submitting.")
     p.add_argument("--sbatch-script", default=None, dest="sbatch_script",
@@ -354,6 +372,12 @@ def main():
 
     seconds = parse_duration(args.time)
     tier = pick_tier(seconds)
+    if args.deadline:
+        if seconds <= DEADLINE_LIMIT:
+            tier = "deadline"
+        else:
+            print(f"[submit] --time is over the deadline partitions' 1-day "
+                  f"limit; using the normal {tier} partitions.")
     def_path = resolve_def_path(REPO / "defs", args.exp)
     if not def_path.exists():
         raise SystemExit(f"[submit] experiment def not found: {def_path}")
@@ -426,9 +450,11 @@ def main():
               f"aggregate across all your running jobs.{note}")
         print(f"      already committed {have_cpus} CPUs / {have_gpus} GPUs, "
               f"this adds {want_cpus} / {want_gpus}.")
+        shorter = ("" if tier in ("fast", "deadline") else
+                   f"a shorter --time (the 4 h group allows "
+                   f"{CAPS['fast']['cpus']} CPUs) or ")
         print(f"      Over the cap the extra job PENDS indefinitely with no "
-              f"error. Consider a shorter --time (the 4 h group allows "
-              f"{CAPS['fast']['cpus']} CPUs) or submitting halves with --only.")
+              f"error. Consider {shorter}submitting halves with --only.")
 
     if args.dry_run:
         print("\n--dry-run, not submitting:")
