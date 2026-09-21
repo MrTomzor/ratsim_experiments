@@ -9,10 +9,12 @@ Rows, paper names, method columns and the "fully baked" threshold come from
 paper/results_table.yaml (see the comments there); CLI flags override it.
 Each cell resolves to one of:
 
-  eval     black   every expected training seed has >= n_eval episodes in its
+  eval     black   at least one training seed has >= n_eval episodes in its
                    eval_episodes.jsonl (eval_one_run.py output, held-out
-                   worlds from --eval_metaseed), at the pinned difficulty.
-                   Value = mean of per-seed means, std across seeds. For
+                   worlds from --eval_metaseed), at the pinned difficulty;
+                   seeds with fewer are left out (listed in the note).
+                   Value = mean of per-seed means, std across seeds (across
+                   that seed's episodes when only one seed qualifies). For
                    human / frontier: >= n_eval episodes under
                    <exp_dir>/external/<method>/episodes.jsonl; std across
                    episodes (there is nothing else to take it over).
@@ -225,7 +227,8 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
     """eval_only (make_final_boxplots.py): never fall back to training data; the
     samples are the individual eval episodes (first n_eval) pooled over every seed
     with a complete, provenance-checked eval -- spread across worlds, not seeds.
-    Status `eval` when that is every expected seed, `partial` when only some."""
+    Status `eval` as soon as ONE seed has a complete eval; seeds without one are
+    left out and named in the note."""
     n_eval, window = cfg["n_eval"], cfg["train_window"]
     out = {"status": "missing", "values": {}, "samples": {}, "seeds": "0/?", "steps": "-",
            "eval_eps": "-", "note": ""}
@@ -286,25 +289,27 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
         eval_ok.append(first_n(ed, n_eval))
     out["eval_eps"] = ",".join(str(c) for c in eval_counts)
 
-    if len(eval_ok) >= expected and len(eval_ok) == len(runs):
+    if eval_ok:
         out["status"] = "eval"
         for m in metrics:
-            out["samples"][m] = (pooled_episodes(eval_ok, m) if eval_only
-                                 else [float(df[m].mean()) for df in eval_ok])
+            if eval_only:
+                out["samples"][m] = pooled_episodes(eval_ok, m)
+            elif len(eval_ok) == 1:  # one seed: spread across its worlds, not a 0 std
+                out["samples"][m] = [float(v) for v in eval_ok[0][m]]
+            else:
+                out["samples"][m] = [float(df[m].mean()) for df in eval_ok]
             out["values"][m] = agg(out["samples"][m])
+        if len(eval_ok) < expected:
+            incomplete = [f"seed{r['seed']}({c})" for r, c in zip(runs, eval_counts) if c < n_eval]
+            if incomplete:
+                notes.insert(0, f"left out, <{n_eval} eval eps: {', '.join(incomplete)}")
+            notes.insert(0, f"eval on {len(eval_ok)}/{expected} seeds")
         out["note"] = "; ".join(notes)
         return out
 
     if eval_only:
-        incomplete = [f"seed{r['seed']}({c})" for r, c in zip(runs, eval_counts) if c < n_eval]
-        if incomplete:
-            notes.insert(0, f"dropped, <{n_eval} eval eps: {', '.join(incomplete)}")
-        if eval_ok:
-            out["status"] = "partial"
-            for m in metrics:
-                out["samples"][m] = pooled_episodes(eval_ok, m)
-                out["values"][m] = agg(out["samples"][m])
-            notes.insert(0, f"eval complete on {len(eval_ok)}/{expected} seeds")
+        if any(eval_counts):
+            notes.insert(0, f"no seed with >= {n_eval} eval eps ({', '.join(map(str, eval_counts))})")
         out["note"] = "; ".join(notes)
         return out
 
@@ -319,18 +324,16 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
             ds = [float(df.tail(window)["difficulty"].mean()) for df in train
                   if "difficulty" in df.columns]
             notes.append(f"train tail at mean d={np.mean(ds):.2f}")
-        if eval_ok:
-            notes.insert(0, f"eval complete on {len(eval_ok)}/{expected} seeds")
         out["note"] = "; ".join(notes)
         return out
 
-    if eval_ok or any(eval_counts):
+    if any(eval_counts):
         out["status"] = "partial"
         pool = [first_n(r["eval_df"], n_eval) for r in runs if r["eval_df"] is not None]
         for m in metrics:
             out["samples"][m] = [float(df[m].mean()) for df in pool]
             out["values"][m] = agg(out["samples"][m])
-        notes.insert(0, f"eval on {len(eval_ok)}/{expected} seeds, no train data")
+        notes.insert(0, f"eval < {n_eval} eps on every seed, no train data")
     else:
         notes.insert(0, "no train_episodes.jsonl / eval_episodes.jsonl in any run")
     out["note"] = "; ".join(notes)

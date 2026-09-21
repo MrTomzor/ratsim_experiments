@@ -24,8 +24,9 @@ held-out eval only -- unlike the table, never the training-episode fallback:
                     seeds with fewer than n_eval eval episodes are left out
   human / frontier  one point per episode (the first n_eval)
 
-The figure does not mark cells that have fewer seeds / episodes than expected;
-the console prints the status (eval / partial) and the dropped seeds per cell. Methods in a row's `na:` are left out; a method with no
+One seed with a complete eval is enough for a cell. The figure does not mark
+cells that have fewer seeds than expected; the console note names the left-out
+seeds per cell. Methods in a row's `na:` are left out; a method with no
 data gets a "no data" mark in its slot so the method order stays the same in
 every world. Points are overlaid on the bars by default (mean +- std alone
 hides how few samples there are); --no-points turns them off.

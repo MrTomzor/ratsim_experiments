@@ -13,8 +13,9 @@
 #   per_method  {method: {exp, variation, difficulty, source}} overrides for a
 #               method whose runs live in a different experiment
 #
-# Cell status (also the colour in the .tex): eval = black (every expected seed
-# has >= n_eval eval episodes; human/frontier: >= n_eval episodes), train =
+# Cell status (also the colour in the .tex): eval = black (at least one seed
+# has >= n_eval eval episodes -- seeds with fewer are left out; human/frontier:
+# >= n_eval episodes), train =
 # blue (last train_window training episodes per seed), partial = orange (some
 # eval episodes but fewer than n_eval and no training data to fall back on),
 # missing = red.
@@ -52,5 +53,5 @@ groups:
   - name: foraging
     rows:
       - {label: ratmaze-foraging,       exp: wellmaze_tight_cue,      na: [frontier]}
-      - {label: forest-foraging,        exp: forest_wells_cue_nopose,        na: [frontier]}
+      - {label: forest-foraging,        exp: forest_wells_cue_unb,        na: [frontier]}
       - {label: 4arm-submazes-foraging, exp: ortho_wells_nohomeprime, na: [frontier]}

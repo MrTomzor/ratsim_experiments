@@ -146,7 +146,8 @@ uses, so the two never disagree. Ids resolve under `results/rci/` (`--local` for
 table from whatever is on disk. `paper/results_table.yaml` is the single place
 for which defs appear, under which paper names, in which method columns, and
 the `n_eval` threshold for "fully baked". Per cell it takes held-out eval
-(`eval_episodes.jsonl` on every expected seed with ≥ n_eval episodes, or
+(`eval_episodes.jsonl` with ≥ n_eval episodes on at least one seed — seeds with
+fewer are left out and named in the status — or
 `external/<method>/episodes.jsonl` for human/frontier) → black; else the tail of
 `train_episodes.jsonl` → blue; else partial eval → orange; else red. Writes a
 tabular-only `.tex` (the paper `\input`s it; `\cellTrain` etc. are
