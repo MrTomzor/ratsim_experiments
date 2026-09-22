@@ -42,6 +42,9 @@ from __future__ import annotations
 
 import numbers
 import os
+import signal
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -134,10 +137,12 @@ def init_run(results_dir, run_meta: dict, *, project: str | None = None,
             mode=mode,
             # The scheduler tees child stdout through a prefixing thread
             # (scheduler.py:spawn_job); wandb wrapping stdout fights with it.
-            settings=wandb.Settings(console="off"),
+            settings=wandb.Settings(console="off",
+                                    init_timeout=INIT_TIMEOUT_S),
         )
     except Exception as e:
         print(f"[wandb] init failed ({type(e).__name__}: {e}); continuing without it.")
+        _abandon_service()
         return None
 
     resumed = getattr(run, "resumed", False)
@@ -146,6 +151,81 @@ def init_run(results_dir, run_meta: dict, *, project: str | None = None,
     if run.url:
         print(f"[wandb] {run.url}")
     return run
+
+
+INIT_TIMEOUT_S = 30.0        # wandb's default is 90 s; a dead network is
+                             # obvious well before that
+ABANDON_TIMEOUT_S = 15.0     # how long a failed init may keep the process
+                             # alive before wandb-core is killed outright
+
+
+def _wandb_service_pids() -> list[int]:
+    """PIDs of the wandb-core / wandb-xpu helpers in this process's subtree."""
+    me = os.getpid()
+    children: dict[int, list[int]] = {}
+    names: dict[int, str] = {}
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    stat = f.read()
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmd = f.read().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                continue
+            # "pid (comm) state ppid ..." -- comm may contain spaces/parens
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+            children.setdefault(ppid, []).append(pid)
+            names[pid] = cmd
+    except OSError:
+        return []
+    out, stack = [], [me]
+    while stack:
+        for c in children.get(stack.pop(), []):
+            stack.append(c)
+            if "wandb-core" in names.get(c, "") or "wandb-xpu" in names.get(c, ""):
+                out.append(c)
+    return out
+
+
+def _abandon_service() -> None:
+    """Shut down wandb's service process after a failed `wandb.init()`.
+
+    `wandb.init` starts a `wandb-core` helper *before* it talks to the
+    backend. When init times out (no route to api.wandb.ai -- measured
+    2026-09-22 during an RCI DNS outage) our code carries on without W&B,
+    but the helper keeps retrying the run-creation request forever, and
+    wandb's atexit hook then waits for it. The training process finished
+    its stage yet never exited, so the scheduler never dispatched the next
+    stage: three PPO runs sat idle for 20+ minutes on a deadline partition.
+
+    `wandb.teardown()` asks the helper to stop and joins it, which blocks on
+    the same retries, so it is given a bounded wait and the helper is
+    SIGKILLed if it does not comply. Nothing was uploaded anyway.
+    """
+    try:
+        import wandb
+    except ImportError:
+        return
+    pids = _wandb_service_pids()
+    t = threading.Thread(target=wandb.teardown, daemon=True)
+    t.start()
+    t.join(ABANDON_TIMEOUT_S)
+    if not t.is_alive():
+        return
+    print(f"[wandb] service did not stop within {ABANDON_TIMEOUT_S:.0f}s; "
+          f"killing wandb-core pids {pids}")
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    t.join(5.0)
+    if t.is_alive():
+        print("[wandb] teardown still blocked; leaving it to the daemon thread")
 
 
 def finish_run(run) -> None:
