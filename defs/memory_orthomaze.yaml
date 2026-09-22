@@ -11,7 +11,7 @@
 #   ./rci_port_probes/submit.sh memory_orthomaze --time 3d
 # See meta_ratsim/RUNNING_EXPERIMENTS.md.
 
-agent_preset: sphereagent_2d_lidar
+agent_preset: sphereagent_2d_lidar_20m
 task_preset: volumetric_exploration_5000_collision_penalty
 world_preset: maze_sectored_orthogonal
 
