@@ -10,7 +10,7 @@ agent_preset: sphereagent_2d_lidar_wells_cue_nopose
 task_preset: volumetric_exploration_4000_collision_penalty
 world_preset: forest_landmarks_wells_unb
 
-total_steps: 40_200_000
+total_steps: 60_000_000
 steps_per_stage: 300_000
 mode: dfs
 
