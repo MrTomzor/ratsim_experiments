@@ -63,6 +63,7 @@ from analyze_experiment import (  # noqa: E402
     BASELINE_COLORS,
     BASELINE_STYLES,
     load_jsonl,
+    train_step_axis,
     parse_run_id,
 )
 from experiment_defs import load_experiment_def  # noqa: E402
@@ -121,8 +122,8 @@ def seed_curves(spec: dict, method: str, metric: str, rolling: int) -> list[tupl
         if (r["method"] != method or r["variation"] != spec["variation"] or df is None
                 or metric not in df.columns or not df[metric].notna().any()):
             continue
-        df = df.sort_values("episode_idx", kind="stable")
-        x = df["steps"].cumsum().to_numpy(dtype=float)
+        df = train_step_axis(r)
+        x = df["cum_steps"].to_numpy(dtype=float)
         y = df[metric].astype(float).rolling(rolling, min_periods=1).mean().to_numpy()
         out.append((x, y))
     return out

@@ -142,12 +142,65 @@ def load_jsonl(p: Path) -> pd.DataFrame | None:
     return pd.DataFrame.from_records(records) if records else None
 
 
+def exp_stage_steps(exp_dir: Path) -> list[int] | None:
+    """Per-stage step counts (before step_multiplier) for the experiment.
+
+    The experiment.yaml snapshot is what ran, but it is written when the
+    scheduler starts and goes stale when `total_steps` is later raised (stages
+    are append-only once `steps_per_stage` is pinned), so it is extended with
+    the tail of the current defs/<exp_id>.yaml when that agrees on the shared
+    prefix. None when neither parses."""
+    import yaml
+    from experiment_defs import load_experiment_def
+    snap = exp_dir / "experiment.yaml"
+    exp_id = exp_dir.name
+    if snap.exists():  # the snapshot knows the real id if the dir was renamed
+        try:
+            exp_id = (yaml.safe_load(snap.read_text()) or {}).get("exp_id", exp_id)
+        except yaml.YAMLError:
+            pass
+    lists = []
+    for p in (snap, REPO_ROOT / "defs" / f"{exp_id}.yaml"):
+        if not p.exists():
+            continue
+        try:
+            exp = load_experiment_def(p)
+        except Exception as e:  # noqa: BLE001 — a broken def shouldn't kill the plot
+            print(f"  WARN: could not parse {p}: {e}")
+            continue
+        lists.append([s.steps for s in exp.stages])
+    if not lists:
+        return None
+    steps = lists[0]
+    for other in lists[1:]:
+        if len(other) > len(steps) and other[:len(steps)] == steps:
+            steps = other
+    return steps
+
+
+def run_stage_ends(run_dir: Path, stage_steps: list[int] | None) -> list[int] | None:
+    """Cumulative env step at which each stage ends, with the run's own
+    step_multiplier (run_config.json) applied — the step the trainer's own
+    counter (SB3 num_timesteps / embodied step, i.e. W&B's x-axis) reaches."""
+    if not stage_steps:
+        return None
+    mult = 1.0
+    cfg = run_dir / "run_config.json"
+    if cfg.exists():
+        try:
+            mult = float(json.loads(cfg.read_text()).get("step_multiplier", 1.0))
+        except ValueError:
+            pass
+    return np.cumsum([int(s * mult) for s in stage_steps]).tolist()
+
+
 def discover_runs(exp_dir: Path) -> list[dict]:
     runs_dir = exp_dir / "runs"
     if not runs_dir.is_dir():
         raise FileNotFoundError(
             f"{runs_dir} doesn't exist — is this a scheduler exp dir? "
             f"Expected layout: <exp_dir>/runs/<variation>__<method>__seed<i>/")
+    stage_steps = exp_stage_steps(exp_dir)
     out = []
     for run_dir in sorted(runs_dir.iterdir()):
         if not run_dir.is_dir():
@@ -168,6 +221,7 @@ def discover_runs(exp_dir: Path) -> list[dict]:
             "eval_df_ablated": load_jsonl(
                 run_dir / "eval_episodes_ablated.jsonl"),
             "done": (run_dir / "DONE").exists(),
+            "stage_ends": run_stage_ends(run_dir, stage_steps),
         })
     return out
 
@@ -186,10 +240,60 @@ def method_linestyles(methods) -> dict[str, str]:
 
 # -- Plotting ---------------------------------------------------------------
 
-def _add_cum_steps(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.sort_values("episode_idx").copy()
-    df["cum_steps"] = df["steps"].cumsum()
-    return df
+def train_step_axis(run: dict) -> pd.DataFrame:
+    """run["train_df"] with a `cum_steps` column on the trainer's own step axis.
+
+    A plain cumsum of episode `steps` is wrong in both directions: SB3 never
+    logs the partial episode each env is in when a stage ends (x runs ~4%
+    short), and embodied only checkpoints every `save_every` seconds, never at
+    loop exit, so each Dreamer stage resumes from a checkpoint up to 15 min old
+    and replays those steps (x ran ~27% long on forest_wells_cue_unb). Both
+    trainers do end stage k at exactly stage_ends[k], though, so each finished
+    stage's episodes are laid out backwards from that end, in file order.
+    Episodes of an earlier stage that land past the next stage's start came
+    from weights that were rolled back and discarded — they are dropped. The
+    unfinished last stage is laid out forwards from the previous stage end.
+
+    Falls back to the plain cumsum when the stage layout is unknown. A stage
+    that crashed and was re-run logs both attempts and is over-long, so it
+    shifts its own start earlier and eats into the stage before it; rare, and
+    confined to that boundary."""
+    df = run["train_df"]
+    ends = run.get("stage_ends")
+    if not ends or "stage_idx" not in df.columns or df["stage_idx"].isna().any():
+        df = df.sort_values("episode_idx", kind="stable").copy()
+        df["cum_steps"] = df["steps"].cumsum()
+        return df
+
+    df = df.reset_index(drop=True)  # file order = chronological append order
+    stages = sorted(int(k) for k in df["stage_idx"].unique())
+    ends = list(ends)
+    while len(ends) <= stages[-1]:  # def lengthened past what we could resolve
+        ends.append(ends[-1] + (ends[-1] - (ends[-2] if len(ends) > 1 else 0)))
+    ckpt_dir = run["run_dir"] / "checkpoints"
+
+    x = pd.Series(np.nan, index=df.index)
+    starts = {}
+    for k in stages:
+        rows = df.index[df["stage_idx"] == k]
+        cs = df.loc[rows, "steps"].cumsum()
+        total = int(cs.iloc[-1])
+        if k < stages[-1] or (ckpt_dir / f"stage_{k}.done").exists():
+            x[rows] = ends[k] - total + cs
+            starts[k] = ends[k] - total
+        else:
+            prev_end = ends[k - 1] if k > 0 else 0
+            x[rows] = prev_end + cs
+            starts[k] = prev_end
+    df["cum_steps"] = x
+
+    keep = pd.Series(True, index=df.index)
+    later_start = np.inf
+    for k in reversed(stages):
+        rows = df.index[df["stage_idx"] == k]
+        keep[rows] = df.loc[rows, "cum_steps"] <= later_start
+        later_start = min(later_start, starts[k])
+    return df[keep].sort_values("cum_steps", kind="stable")
 
 
 def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
@@ -212,7 +316,7 @@ def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
     meth_style = meth_style or method_linestyles([r["method"] for r in have])
 
     for r in have:
-        df = _add_cum_steps(r["train_df"])
+        df = train_step_axis(r)
         smooth = df[metric].rolling(rolling, min_periods=1).mean()
         ax.plot(df["cum_steps"], smooth,
                 color=var_color[r["variation"]],
@@ -225,7 +329,7 @@ def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
     for (var, meth), rs in groups.items():
         xs_per_seed, ys_per_seed = [], []
         for r in rs:
-            df = _add_cum_steps(r["train_df"])
+            df = train_step_axis(r)
             xs_per_seed.append(df["cum_steps"].to_numpy())
             ys_per_seed.append(df[metric].rolling(rolling, min_periods=1).mean().to_numpy())
         # Common x-grid clipped to the shortest seed's run.

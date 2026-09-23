@@ -116,6 +116,16 @@ at the mirror:
 No `--run-eval` means it only reads the jsonls — no Unity, no venv subprocesses. PNGs land
 in `results/rci/<exp_id>/analysis/`.
 
+**Training-curve x-axis** (`train_step_axis` in `analyze_experiment.py`, shared by
+`plot_training_grid.py` / `make_training_figure.py`) is the trainer's own step counter, i.e.
+what W&B shows — *not* `cumsum(steps)` of the jsonl. Each finished stage's episodes are laid
+out backwards from that stage's exact end step (stages from `experiment.yaml`, extended by
+the current `defs/<exp>.yaml` if it was lengthened). Why: embodied never checkpoints at loop
+exit (only every `save_every`=900 s), so every Dreamer stage resumes from a checkpoint up to
+15 min old and replays those steps, and the jsonl logs them twice (+27% x on
+forest_wells_cue_unb). The episodes from the rolled-back stretch are dropped. PPO's jsonl
+runs ~4% short instead (the partial episode at each stage end is never logged).
+
 **Human / frontier baselines on the training curves.** Anything under
 `<exp_dir>/external/<method>/episodes.jsonl` — what `record_trajectories.py --methods
 frontier,human` writes, or `test.py ... results_dir=<exp_dir>/external/<method>` directly —
