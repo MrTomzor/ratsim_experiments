@@ -1,0 +1,32 @@
+# Position-input ablation for dreamer on memory_orthomaze: what does the gps
+# observation buy, and does a grid-cell encoding of it do better than raw x,y?
+#
+# Only the ablated arms are trained here. The raw-position arm is the dreamer
+# baseline of memory_orthomaze (its sphereagent_2d_lidar of 2026-08 is
+# sphereagent_2d_lidar_20m + an obs-inert `odom` entry); world, task and stage
+# layout are copied from it so the curves overlay. Caveat: that baseline was
+# trained before the orthomaze sector-leak fix (2026-09-22) -- if these arms
+# land on a rebuilt Unity build the worlds are not identical.
+#
+# Cardinality: 2 variations × 1 method × 3 seeds = 6 runs.
+# Each run is 20 stages of 300k steps = 6M.
+#
+#   ./rci_port_probes/submit.sh memory_orthomaze_pose_ablation --time 3d
+
+task_preset: volumetric_exploration_5000_collision_penalty
+world_preset: maze_sectored_orthogonal
+
+steps_per_stage: 300_000
+total_steps: 6_000_000
+mode: dfs
+
+methods:
+  - name: dreamer
+
+seeds: 3
+
+variations:
+  - name: no_pose
+    agent_preset: sphereagent_2d_lidar_20m_nopose
+  - name: grid_cells
+    agent_preset: sphereagent_2d_lidar_20m_gridcells
