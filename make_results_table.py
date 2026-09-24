@@ -4,9 +4,12 @@
     ~/ratvenv/venv/bin/python make_results_table.py --n 10 --rows 3buildings,5houses-sar
     ~/ratvenv/venv/bin/python make_results_table.py --methods ppo,dreamer --out /tmp/t.tex
     ~/ratvenv/venv/bin/python make_results_table.py --strict      # fail unless all black
+    ~/ratvenv/venv/bin/python make_results_table.py --only-score  # no OBJ columns
 
 Rows, paper names, method columns and the "fully baked" threshold come from
 paper/results_table.yaml (see the comments there); CLI flags override it.
+The human column is always moved last, whatever its place in the config (the
+config order is shared with the figure scripts).
 Each cell resolves to one of:
 
   eval     black   at least one training seed has >= n_eval episodes in its
@@ -37,6 +40,10 @@ eval episodes per seed, so it is obvious what still needs baking.
 
 The mean is always typeset black; only the \\pm std subscript is coloured, so a
 cell's provenance is visible without making the number itself hard to read.
+In each row, the best (highest) mean of every metric listed under `bold_best:`
+in the config (default: total_score) is set in bold -- compared at the printed
+precision, so a tie bolds every tied cell. Every cell with a value competes,
+whatever its colour.
 
 The .tex defines \\cellEval, \\cellTrain, \\cellPartial, \\cellMissing, \\cellNA
 with \\providecommand (the first three wrap the subscript, in math mode) --
@@ -103,6 +110,7 @@ def load_config(path: Path) -> dict:
     cfg.setdefault("train_window", 100)
     cfg.setdefault("eval_metaseed", 42)
     cfg.setdefault("decimals", {})
+    cfg.setdefault("bold_best", ["total_score"])
     return cfg
 
 
@@ -387,9 +395,20 @@ def resolve_external_cell(spec: dict, method: str, cfg: dict, metrics: list[str]
 #  Output
 # ─────────────────────────────────────────────
 
-def fmt_value(mean: float, std: float, decimals: int, macro: str) -> str:
+def fmt_value(mean: float, std: float, decimals: int, macro: str, bold: bool = False) -> str:
     """Mean is always plain (black); only the +-std subscript carries the provenance colour."""
-    return (f"${mean:.{decimals}f}_{{{macro}{{\\pm {std:.{decimals}f}}}}}$")
+    num = f"{mean:.{decimals}f}"
+    if bold:
+        num = f"\\mathbf{{{num}}}"
+    return (f"${num}_{{{macro}{{\\pm {std:.{decimals}f}}}}}$")
+
+
+def best_in_row(row_label: str, methods: list[str], met: str, decimals: int,
+                cells: dict) -> float | None:
+    """Highest mean of `met` across the row's methods, rounded as printed."""
+    vals = [round(cells[(row_label, m)]["values"][met][0], decimals) for m in methods
+            if met in cells[(row_label, m)].get("values", {})]
+    return max(vals) if vals else None
 
 
 def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[str],
@@ -411,25 +430,31 @@ def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[
     # numbers left-aligned; a vertical rule separates each method's block of metrics
     L.append("\\begin{tabular}{l " + " | ".join("l" * len(metrics) for _ in methods) + "}")
     L.append("\\toprule")
-    head = ["\\multirow{2}{*}{\\textbf{World}}"]
+    # one metric per method (--only-score): the method name is the whole header
+    two_rows = len(metrics) > 1
+    head = ["\\multirow{2}{*}{\\textbf{World}}" if two_rows else "\\textbf{World}"]
     for m in methods:
         # multicolumn overrides the column spec, so carry the "|" here too
         bar = "" if m == methods[-1] else "|"
         head.append(f"\\multicolumn{{{len(metrics)}}}{{c{bar}}}"
                     f"{{\\textbf{{{cfg['methods'][m]}}}}}")
     L.append(" & ".join(head) + " \\\\")
-    rules = []
-    for i in range(len(methods)):
-        a = 2 + i * len(metrics)
-        rules.append(f"\\cmidrule(lr){{{a}-{a + len(metrics) - 1}}}")
-    L.append(" ".join(rules))
-    L.append(" & " + " & ".join(cfg["metrics"][met] for _ in methods for met in metrics) + " \\\\")
+    if two_rows:
+        rules = []
+        for i in range(len(methods)):
+            a = 2 + i * len(metrics)
+            rules.append(f"\\cmidrule(lr){{{a}-{a + len(metrics) - 1}}}")
+        L.append(" ".join(rules))
+        L.append(" & " + " & ".join(cfg["metrics"][met] for _ in methods for met in metrics) + " \\\\")
     L.append("\\midrule")
     for gi, g in enumerate(groups):
         if gi:
             L.append("\\midrule")
         for row in g["rows"]:
             parts = [row["label"]]
+            best = {met: best_in_row(row["label"], methods, met,
+                                     int(cfg["decimals"].get(met, 1)), cells)
+                    for met in metrics if met in cfg["bold_best"]}
             for m in methods:
                 c = cells[(row["label"], m)]
                 for met in metrics:
@@ -439,9 +464,9 @@ def render_tex(cfg: dict, groups: list[dict], methods: list[str], metrics: list[
                         parts.append("\\cellMissing")
                     else:
                         mean, std = c["values"][met]
-                        parts.append(fmt_value(mean, std,
-                                               int(cfg["decimals"].get(met, 1)),
-                                               STATUS_MACRO[c["status"]]))
+                        dec = int(cfg["decimals"].get(met, 1))
+                        bold = best.get(met) is not None and round(mean, dec) == best[met]
+                        parts.append(fmt_value(mean, std, dec, STATUS_MACRO[c["status"]], bold))
             L.append(" & ".join(parts) + " \\\\")
     L.append("\\bottomrule")
     L.append("\\end{tabular}")
@@ -494,6 +519,8 @@ def main() -> None:
                                                 "else results/analysis/results_table.tex)")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 unless every cell is eval (black) or n/a")
+    ap.add_argument("--only-score", action="store_true", dest="only_score",
+                    help="only the total_score column per method (drop objects_found)")
     args = ap.parse_args()
 
     cfg = load_config(Path(args.config))
@@ -509,7 +536,11 @@ def main() -> None:
         if unknown:
             sys.exit(f"ERROR: --methods {unknown} not in config methods {methods}")
         methods = keep
+    if "human" in methods:  # human is the reference, so it goes last
+        methods = [m for m in methods if m != "human"] + ["human"]
     metrics = list(cfg["metrics"])
+    if args.only_score:
+        metrics = [m for m in metrics if m == "total_score"]
 
     groups = []
     want = None if not args.rows else {r.strip() for r in args.rows.split(",")}
