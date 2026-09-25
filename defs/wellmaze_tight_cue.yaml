@@ -10,8 +10,8 @@ agent_preset: sphereagent_2d_lidar_wells_cue_20m
 task_preset: volumetric_exploration_2000_collision_penalty
 world_preset: widloski_maze_3x3_tight
 
-total_steps: 6_000_000
-n_stages: 20
+total_steps: 3_000_000
+n_stages: 10
 mode: dfs
 
 methods:

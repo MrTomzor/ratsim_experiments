@@ -20,11 +20,10 @@ world_preset: longyard_search
 # resizing the finished ones -- stage_<i>.done records only *that* stage K
 # finished, never how big it was.
 steps_per_stage: 300_000
-total_steps: 6_000_000
+total_steps: 3_000_000
 mode: dfs
 
 methods:
-  - name: recurrent_ppo
   - name: dreamer
   - name: ppo
 

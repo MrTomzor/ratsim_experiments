@@ -3,8 +3,8 @@
     ~/ratvenv/venv/bin/python make_training_figure.py                        # total_score
     ~/ratvenv/venv/bin/python make_training_figure.py --metrics objects_found
     ~/ratvenv/venv/bin/python make_training_figure.py --metrics total_score,objects_found
-    ~/ratvenv/venv/bin/python make_training_figure.py --xmax def             # x-axis to the def's target
-    ~/ratvenv/venv/bin/python make_training_figure.py --min-seeds 1 --per-seed
+    ~/ratvenv/venv/bin/python make_training_figure.py --xmax longest         # x-axis to the longest curve
+    ~/ratvenv/venv/bin/python make_training_figure.py --min-seeds 0 --per-seed
     ~/ratvenv/venv/bin/python make_training_figure.py --layout tall          # 4x2 portrait (or --cols N)
 
     # any def(s), paper row or not -- to see whether it belongs in the paper
@@ -27,14 +27,15 @@ table -- with a faint +/-1 std band. Methods listed in a row's `na:` are left ou
 
 Curves: per seed, a rolling mean over --rolling episodes against cumulative env
 steps; per method, the mean across seeds on a shared step grid with a +/-1 std
-band across seeds. By default the mean stops where the shortest seed stops
-(same rule as analyze_experiment.py); `--min-seeds K` continues it while at
-least K seeds still have data, the fewer-seeds tail drawn lighter so it is
-obvious. `--per-seed` adds the thin individual-seed lines.
+band across seeds. By default the mean runs as far as any seed has data
+(`--min-seeds 1`), averaging whichever seeds reach each step; `--min-seeds K`
+stops it where fewer than K seeds have data, and `--min-seeds 0` where the
+shortest seed stops (same rule as analyze_experiment.py).
+`--per-seed` adds the thin individual-seed lines.
 
 X-axis extent (`--xmax`):
-  longest  the furthest a drawn curve reaches in that panel (default)
-  def      the def's total training steps (sum of stage steps), taken from
+  longest  the furthest a drawn curve reaches in that panel
+  def      (default) the def's total training steps (sum of stage steps), taken from
            defs/<exp>.yaml -- the CURRENT target, which may have been
            lengthened since the pulled results/rci/<exp>/experiment.yaml was
            written -- falling back to that experiment.yaml. Curves already past
@@ -198,18 +199,10 @@ def draw_panel(ax, row: dict, methods: list[str], metric: str, args, cfg: dict,
             notes.append(f"{m}: seeds don't overlap")
             continue
         drew_rl = True
-        full = mc["count"] == mc["n"]
-        # fewer-seeds tail lighter; overlap one point so the line is continuous
-        tail = ~full
-        if tail.any() and full.any():
-            tail[np.argmax(tail) - 1] = True
-        for mask, alpha in ((full, 1.0), (tail, 0.45)):
-            if not mask.any():
-                continue
-            x = mc["x"][mask] / 1e6
-            ax.plot(x, mc["mean"][mask], color=c, lw=1.8, alpha=alpha)
-            ax.fill_between(x, (mc["mean"] - mc["std"])[mask], (mc["mean"] + mc["std"])[mask],
-                            color=c, alpha=0.18 * alpha, lw=0)
+        x = mc["x"] / 1e6
+        ax.plot(x, mc["mean"], color=c, lw=1.8)
+        ax.fill_between(x, mc["mean"] - mc["std"], mc["mean"] + mc["std"],
+                        color=c, alpha=0.18, lw=0)
         x_end = max(x_end, float(mc["x"][-1]))
         notes.append(f"{m}: {mc['n']} seeds, to {mc['x'][-1] / 1e6:.1f}M")
 
@@ -399,11 +392,12 @@ def main() -> None:
     ap.add_argument("--config", default=str(DEFAULT_CONFIG), help="paper/results_table.yaml")
     ap.add_argument("--metrics", default="total_score",
                     help="comma-separated: total_score, objects_found (one figure each)")
-    ap.add_argument("--xmax", choices=["longest", "def"], default="longest",
+    ap.add_argument("--xmax", choices=["longest", "def"], default="def",
                     help="x extent per panel: longest drawn curve, or the def's total steps")
     ap.add_argument("--rolling", type=int, default=100, help="rolling-mean window in episodes")
-    ap.add_argument("--min-seeds", type=int, default=0, dest="min_seeds",
-                    help="continue the mean while >= K seeds have data (0 = all seeds)")
+    ap.add_argument("--min-seeds", type=int, default=1, dest="min_seeds",
+                    help="continue the mean while >= K seeds have data (default 1 = as far as "
+                         "any seed goes; 0 = all seeds)")
     ap.add_argument("--per-seed", action="store_true", dest="per_seed",
                     help="also draw thin per-seed lines")
     ap.add_argument("--rows", default=None, help="subset of table rows (labels or exp ids)")
