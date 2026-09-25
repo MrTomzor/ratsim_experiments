@@ -5,6 +5,7 @@ Usage:
     python analyze_experiment.py results/experiments/compare_5houses/
     python analyze_experiment.py compare_5houses --out my_plots/
     python analyze_experiment.py compare_5houses --rolling 100
+    python analyze_experiment.py compare_5houses --figsize 5 3.5 --font-size 12
 
 Walks `<exp_dir>/runs/<variation>__<method>__seed<i>/`, loads each
 `train_episodes.jsonl`, and writes:
@@ -298,14 +299,17 @@ def train_step_axis(run: dict) -> pd.DataFrame:
 
 def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
                         var_color: dict | None = None,
-                        meth_style: dict | None = None) -> bool:
+                        meth_style: dict | None = None,
+                        max_steps: float | None = None) -> bool:
     """Paint rolling-mean training curves for one metric onto `ax`.
 
     Per-seed lines drawn thin; per-(variation, method) mean drawn bold, with
     the mean computed on a shared interpolated x-grid (seeds don't end at the
     same cum_steps). Returns False (and draws nothing) when no run carries the
     metric. `var_color` / `meth_style` let a caller keep colours consistent
-    across several axes; by default they are derived from `runs`."""
+    across several axes; by default they are derived from `runs`.
+    `max_steps` cuts every curve off at that env step (the rolling mean is
+    trailing, so the kept part is unchanged by the cut)."""
     have = [r for r in runs if r["train_df"] is not None
             and metric in r["train_df"].columns
             and r["train_df"][metric].notna().any()]
@@ -318,6 +322,9 @@ def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
     for r in have:
         df = train_step_axis(r)
         smooth = df[metric].rolling(rolling, min_periods=1).mean()
+        if max_steps is not None:
+            keep = df["cum_steps"] <= max_steps
+            df, smooth = df[keep], smooth[keep]
         ax.plot(df["cum_steps"], smooth,
                 color=var_color[r["variation"]],
                 linestyle=meth_style[r["method"]],
@@ -335,6 +342,8 @@ def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
         # Common x-grid clipped to the shortest seed's run.
         x_lo = max(x[0] for x in xs_per_seed)
         x_hi = min(x[-1] for x in xs_per_seed)
+        if max_steps is not None:
+            x_hi = min(x_hi, max_steps)
         if x_hi <= x_lo:
             continue
         x_grid = np.linspace(x_lo, x_hi, 200)
@@ -353,23 +362,39 @@ def draw_training_curve(ax, runs: list[dict], metric: str, rolling: int,
 
 def plot_training_curve(runs: list[dict], metric: str, rolling: int,
                         out_dir: Path,
-                        baselines: list[dict] | None = None) -> None:
+                        baselines: list[dict] | None = None,
+                        figsize: tuple[float, float] = (10, 5.5),
+                        font_size: float | None = None,
+                        legend_font_size: float | None = None,
+                        max_steps: float | None = None) -> None:
     """One image per metric: `draw_training_curve` plus, for the score-like
     metrics, horizontal lines for any external baselines (human / frontier
-    eval episodes under `<exp_dir>/external/`, see `load_external_baselines`)."""
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    if not draw_training_curve(ax, runs, metric, rolling):
+    eval episodes under `<exp_dir>/external/`, see `load_external_baselines`).
+
+    `figsize` / `font_size` / `legend_font_size` are for paper figures: a
+    smaller canvas with larger text stays readable once the image is shrunk
+    to a fraction of the page width (scaling the default image down shrinks
+    the text with it)."""
+    rc = {} if font_size is None else {"font.size": font_size}
+    if legend_font_size is None:
+        legend_font_size = 8 if font_size is None else font_size
+    # Tick labels are created lazily at draw time, so savefig stays inside
+    # the rc context too.
+    with plt.rc_context(rc):
+        fig, ax = plt.subplots(figsize=figsize)
+        if not draw_training_curve(ax, runs, metric, rolling,
+                                   max_steps=max_steps):
+            plt.close(fig)
+            print(f"  -> skipping train_{metric}: no data")
+            return
+        if baselines and metric not in OPTIONAL_TRAIN_METRICS:
+            draw_baselines(ax, baselines, metric)
+        ax.set_title(f"Training: {metric}")
+        ax.legend(fontsize=legend_font_size, loc="best")
+        fig.tight_layout()
+        out_path = out_dir / f"train_{metric}.png"
+        fig.savefig(out_path, dpi=120)
         plt.close(fig)
-        print(f"  -> skipping train_{metric}: no data")
-        return
-    if baselines and metric not in OPTIONAL_TRAIN_METRICS:
-        draw_baselines(ax, baselines, metric)
-    ax.set_title(f"Training: {metric}")
-    ax.legend(fontsize=8, loc="best")
-    fig.tight_layout()
-    out_path = out_dir / f"train_{metric}.png"
-    fig.savefig(out_path, dpi=120)
-    plt.close(fig)
     print(f"  -> {out_path}")
 
 
@@ -710,6 +735,24 @@ def main() -> None:
     ap.add_argument("--rolling", type=int, default=50,
                     help="Rolling window for training curves, in episodes "
                          "(default: 50)")
+    ap.add_argument("--figsize", type=float, nargs=2, default=[10, 5.5],
+                    metavar=("W", "H"),
+                    help="Training-curve figure size in inches (default: "
+                         "10 5.5). For a half-page-width paper figure use "
+                         "a smaller canvas with --font-size, e.g. "
+                         "--figsize 5 3.5 --font-size 12.")
+    ap.add_argument("--font-size", type=float, default=None, dest="font_size",
+                    help="Base font size (pt) for training-curve text: "
+                         "title, axis labels, ticks and, unless "
+                         "--legend-font-size is given, the legend "
+                         "(default: matplotlib's 10, legend 8).")
+    ap.add_argument("--legend-font-size", type=float, default=None,
+                    dest="legend_font_size",
+                    help="Legend font size (pt) for training curves "
+                         "(default: --font-size, else 8).")
+    ap.add_argument("--max-steps", type=float, default=None, dest="max_steps",
+                    help="End the training curves at this env step, e.g. "
+                         "7e6 (default: plot everything).")
     ap.add_argument("--run-eval", type=int, default=None, metavar="N",
                     dest="run_eval",
                     help="Before plotting, run N eval episodes per run on "
@@ -825,10 +868,13 @@ def main() -> None:
     if baselines:
         print("  external baselines: "
               + ", ".join(baseline_label(b) for b in baselines))
+    style = dict(figsize=tuple(args.figsize), font_size=args.font_size,
+                 legend_font_size=args.legend_font_size,
+                 max_steps=args.max_steps)
     for m in TRAIN_METRICS:
-        plot_training_curve(runs, m, args.rolling, out_dir, baselines)
+        plot_training_curve(runs, m, args.rolling, out_dir, baselines, **style)
     for m in OPTIONAL_TRAIN_METRICS:
-        plot_training_curve(runs, m, args.rolling, out_dir)
+        plot_training_curve(runs, m, args.rolling, out_dir, **style)
 
     if n_eval:
         for m in EVAL_METRICS:

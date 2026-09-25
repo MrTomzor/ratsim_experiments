@@ -16,9 +16,11 @@ manifest under `snapshots`).
     python plot_trajectories.py memory_3malls --background ortho            # on the rendered world
 
 Rows follow the experiment order given; an experiment recorded with
---n-worldseeds N contributes N rows. Columns are the methods in --methods
+--n-worldseeds N contributes N rows (--n-worldseeds K here keeps K of them, starting at index --worldseed-start). Columns are the methods in --methods
 order (default: every method any manifest has, in first-seen order). A panel
-without data says so instead of failing.
+without data says so instead of failing. A row is labelled with its paper name
+(`label:` of the row with that `exp:` in paper/results_table.yaml) when there is
+one, else the experiment id; --no-paper-names always uses the id.
 
 Output: <out>/trajectories_<layout>[_<view>][_bw][_<cmap>][_<name>].png, default out =
 results/analysis/<exp1>+<exp2>+.../ (one folder per set of experiments, so
@@ -41,6 +43,7 @@ from ratsim.ratsim_vis.trajectory_plot import default_colors, plot_trajectories 
 from ratsim.task_tracker.trajectory_record import load_trajectory  # noqa: E402
 
 from ratsim.world_snapshot import load_snapshot  # noqa: E402
+from make_results_table import DEFAULT_CONFIG, load_config  # noqa: E402
 from record_trajectories import MANIFEST_NAME, resolve_exp_dir  # noqa: E402
 
 
@@ -48,8 +51,11 @@ from record_trajectories import MANIFEST_NAME, resolve_exp_dir  # noqa: E402
 #  Rows
 # ─────────────────────────────────────────────
 
-def load_rows(exps: list[str], source: str = "rci") -> list[dict]:
-    """One row per (experiment, world seed): {exp, world_seed, cells: {method: npz}}."""
+def load_rows(exps: list[str], source: str = "rci", n_worldseeds: int | None = None,
+              worldseed_start: int = 0) -> list[dict]:
+    """One row per (experiment, world seed): {exp, world_seed, cells: {method: npz}}.
+    Keeps each manifest's world seeds from index worldseed_start on, at most
+    n_worldseeds of them."""
     rows = []
     for exp in exps:
         exp_dir = resolve_exp_dir(exp, source)
@@ -62,6 +68,11 @@ def load_rows(exps: list[str], source: str = "rci") -> list[dict]:
         seeds = man.get("world_seeds") or []
         if not seeds:
             print(f"  [warn] {exp_dir.name}: manifest has no world seeds")
+            continue
+        seeds = seeds[worldseed_start:]
+        seeds = seeds[:n_worldseeds] if n_worldseeds else seeds
+        if not seeds:
+            print(f"  [warn] {exp_dir.name}: no world seeds at index >= {worldseed_start}")
             continue
         for ws in seeds:
             cells = {}
@@ -113,8 +124,18 @@ def row_background(row: dict, view: str | None, bw: bool = False) -> tuple:
     return _BG_CACHE[png]
 
 
+def paper_names(config: str | None) -> dict[str, str]:
+    """{exp id: row label} from the paper results table (rows' own `exp` only)."""
+    if not config or not Path(config).exists():
+        return {}
+    cfg = load_config(Path(config))
+    return {row["exp"]: row["label"] for g in cfg["groups"] for row in g.get("rows", [])
+            if row.get("exp") and row.get("label")}
+
+
 def row_label(row: dict) -> str:
-    return f"{row['exp']}\nworld {row['world_seed']}" if row["multi"] else row["exp"]
+    name = row.get("paper") or row["exp"]
+    return f"{name}\nworld {row['world_seed']}" if row["multi"] else name
 
 
 # ─────────────────────────────────────────────
@@ -239,6 +260,16 @@ def main() -> None:
     ap.add_argument("exps", nargs="+", help="experiment ids in row order (or paths)")
     ap.add_argument("--methods", default=None,
                     help="comma-separated column order (default: all recorded, first seen)")
+    ap.add_argument("--n-worldseeds", type=int, default=None, dest="n_worldseeds",
+                    help="rows per experiment: only the first N of its recorded world seeds "
+                         "(manifest order, from --worldseed-start on; default all)")
+    ap.add_argument("--worldseed-start", type=int, default=0, dest="worldseed_start",
+                    help="index of the first world seed to draw (0 = the manifest's first)")
+    ap.add_argument("--config", default=str(DEFAULT_CONFIG),
+                    help="paper/results_table.yaml: rows of an exp listed there are labelled "
+                         "with its paper name")
+    ap.add_argument("--no-paper-names", action="store_true", dest="no_paper_names",
+                    help="label rows with the experiment id even if it has a paper name")
     ap.add_argument("--overlay", action="store_true",
                     help="one panel per row with all methods overlaid, instead of the grid")
     ap.add_argument("--overlay-cols", type=int, default=2)
@@ -274,7 +305,8 @@ def main() -> None:
     args = ap.parse_args()
     args.colour_by_time = args.cmap is not None
 
-    rows = load_rows(args.exps, "local" if args.local else "rci")
+    rows = load_rows(args.exps, "local" if args.local else "rci", args.n_worldseeds,
+                     args.worldseed_start)
     if not rows:
         sys.exit("ERROR: nothing to plot.")
     found = []
@@ -292,6 +324,9 @@ def main() -> None:
     if not labels:
         sys.exit("ERROR: no methods recorded in these manifests.")
 
+    names = {} if args.no_paper_names else paper_names(args.config)
+    for r in rows:
+        r["paper"] = names.get(r["exp"])
     print(f"Rows:    {[row_label(r).replace(chr(10), ' ') for r in rows]}")
     print(f"Columns: {labels}")
     exp_names = []

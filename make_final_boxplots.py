@@ -28,7 +28,7 @@ One seed with a complete eval is enough for a cell. The figure does not mark
 cells that have fewer seeds than expected; the console note names the left-out
 seeds per cell. Methods in a row's `na:` are left out; a method with no
 data gets a "no data" mark in its slot so the method order stays the same in
-every world. Points are overlaid on the bars by default (mean +- std alone
+every world; human is always drawn last, as in the table. Points are overlaid on the bars by default (mean +- std alone
 hides how few samples there are); --no-points turns them off.
 
 Output: <out>/final_boxplots/<metric>/<world label>.{png,pdf}, and with --grid
@@ -166,7 +166,9 @@ def main() -> None:
         if bad:
             sys.exit(f"ERROR: --methods {bad} not among {methods}")
         methods = [m for m in methods if m in keep]
-    metrics = [m.strip() for m in args.metrics.split(",") if m.strip()]
+    if "human" in methods:  # human is the reference, so it goes last (as in the table)
+        methods = [m for m in methods if m != "human"] + ["human"]
+    metrics =[m.strip() for m in args.metrics.split(",") if m.strip()]
     bad = [m for m in metrics if m not in METRIC_LABELS]
     if bad:
         sys.exit(f"ERROR: --metrics {bad}; known: {list(METRIC_LABELS)}")

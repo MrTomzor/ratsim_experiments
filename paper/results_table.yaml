@@ -9,6 +9,9 @@
 #   variation   run variation to take (default: baseline)
 #   difficulty  pinned difficulty rung the eval must have been run at (adaptive
 #               defs only; evals at another rung do NOT count)
+#   eval_metaseed  metaseed this row's eval worlds are drawn from (default: the
+#               top-level eval_metaseed); use it when two rows share a world
+#               generator, so a human doesn't replay worlds they already saw
 #   na          methods that don't apply to this row -> plain dash, never red
 #   per_method  {method: {exp, variation, difficulty, source}} overrides for a
 #               method whose runs live in a different experiment
@@ -25,7 +28,7 @@ figures_out: ~/git/foragers_paper/fig   # make_world_figure.py output dir
 
 n_eval: 5
 train_window: 100
-eval_metaseed: 42          # eval files from another metaseed don't count
+eval_metaseed: 42          # default for rows without their own; eval files from another metaseed don't count
 
 metrics:                   # column pair per method, in this order
   objects_found: OBJ
@@ -44,7 +47,7 @@ groups:
   - name: static search
     rows:
       - {label: memorymaze15x15,        exp: memorymaze_15x15}
-      - {label: 3buildings,             exp: memory_3malls}
+      - {label: 10houses-fenced,             exp: longyard}
       - {label: 4arm-submazes,          exp: memory_orthomaze}
   - name: dynamic search
     rows:
@@ -54,4 +57,4 @@ groups:
     rows:
       - {label: ratmaze-foraging,       exp: wellmaze_tight_cue,      na: [frontier]}
       - {label: forest-foraging,        exp: forest_wells_cue_unb,        na: [frontier]}
-      - {label: 4arm-submazes-foraging, exp: ortho_wells_nohomeprime, na: [frontier]}
+      - {label: 4arm-submazes-foraging, exp: ortho_wells_2k_nopose, na: [frontier], eval_metaseed: 43}

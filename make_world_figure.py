@@ -112,7 +112,8 @@ def table_rows(cfg: dict, only: list[str] | None) -> list[dict]:
         for r in g.get("rows", []):
             rows.append({"label": r["label"], "exp": r["exp"], "group": g.get("name", ""),
                          "variation": r.get("variation"), "difficulty": r.get("difficulty"),
-                         "source": r.get("source", "rci")})
+                         "source": r.get("source", "rci"),
+                         "eval_metaseed": r.get("eval_metaseed")})
     if only:
         by = {r["label"]: r for r in rows} | {r["exp"]: r for r in rows}
         bad = [k for k in only if k not in by]
@@ -247,13 +248,17 @@ class TileFetcher:
 def world_blocks(args, fetcher: TileFetcher, cache: Path) -> list[dict]:
     cfg = load_table_config(Path(args.config))
     rows = table_rows(cfg, args.rows.split(",") if args.rows else None)
-    metaseed = int(args.eval_metaseed if args.eval_metaseed is not None
-                   else cfg.get("eval_metaseed", 42))
-    seeds = ([int(s) for s in args.seeds.split(",")] if args.seeds
-             else eval_world_seeds(metaseed, args.seeds_per_world, skip=1 + args.seed_start))
-    print(f"[world_figure] {len(rows)} worlds x seeds {seeds} (eval_metaseed {metaseed})")
+    default_ms = int(cfg.get("eval_metaseed", 42))
+    print(f"[world_figure] {len(rows)} worlds x {args.seeds_per_world} seeds")
     blocks = []
     for r in rows:
+        # --eval-metaseed > row eval_metaseed > table eval_metaseed
+        metaseed = int(args.eval_metaseed if args.eval_metaseed is not None
+                       else r["eval_metaseed"] if r["eval_metaseed"] is not None
+                       else default_ms)
+        seeds = ([int(s) for s in args.seeds.split(",")] if args.seeds
+                 else eval_world_seeds(metaseed, args.seeds_per_world, skip=1 + args.seed_start))
+        print(f"[world_figure] {r['exp']}: seeds {seeds} (eval_metaseed {metaseed})")
         exp_dir, man = exp_dir_or_def(r["exp"], r["source"])
         if man.get("world_seeds") and args.seeds is None and man["world_seeds"][0] != seeds[0]:
             print(f"  [warn] {r['exp']}: manifest eval world {man['world_seeds'][0]} != "
@@ -476,7 +481,7 @@ def add_common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--seed-start", type=int, default=0, dest="seed_start",
                     help="skip the first K eval worlds (e.g. 4 with N=4 shows eval worlds 5-8)")
     ap.add_argument("--eval-metaseed", type=int, default=None, dest="eval_metaseed",
-                    help="metaseed the eval worlds are drawn from (default: yaml eval_metaseed, 42)")
+                    help="metaseed the eval worlds are drawn from (default: the row's yaml eval_metaseed, else the top-level one, 42)")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG), help="paper/results_table.yaml")
     ap.add_argument("--view", default="ortho", choices=["ortho", "persp"])
     ap.add_argument("--width", type=int, default=2048, help="render width in px (cache key)")

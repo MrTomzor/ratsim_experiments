@@ -121,6 +121,7 @@ def cell_spec(row: dict, method: str) -> dict:
         "variation": row.get("variation", "baseline"),
         "difficulty": row.get("difficulty"),
         "source": row.get("source", "rci"),
+        "eval_metaseed": row.get("eval_metaseed"),
     }
     spec.update((row.get("per_method") or {}).get(method) or {})
     return spec
@@ -277,6 +278,8 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
 
     # -- eval: first n_eval episodes per run, provenance checked --
     eval_ok, eval_counts, notes = [], [], []
+    want_ms = (spec["eval_metaseed"] if spec.get("eval_metaseed") is not None
+               else cfg["eval_metaseed"])
     for r in runs:
         ed = r["eval_df"]
         n = 0 if ed is None else len(ed)
@@ -284,8 +287,8 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
         if ed is None:
             continue
         ms, d = eval_provenance(r["run_dir"])
-        if ms is not None and int(ms) != int(cfg["eval_metaseed"]):
-            notes.append(f"seed{r['seed']}: eval_metaseed {ms} != {cfg['eval_metaseed']}")
+        if ms is not None and int(ms) != int(want_ms):
+            notes.append(f"seed{r['seed']}: eval_metaseed {ms} != {want_ms}")
             continue
         if not same_difficulty(d, spec["difficulty"]):
             notes.append(f"seed{r['seed']}: eval at d={d}, table wants d={spec['difficulty']}")
