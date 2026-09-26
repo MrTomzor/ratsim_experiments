@@ -16,14 +16,11 @@ Each cell resolves to one of:
                    eval_episodes.jsonl (eval_one_run.py output, held-out
                    worlds from --eval_metaseed), at the pinned difficulty;
                    seeds with fewer are left out (listed in the note).
-                   Value = mean of per-seed means, std across seeds (across
-                   that seed's episodes when only one seed qualifies). For
-                   human / frontier: >= n_eval episodes under
-                   <exp_dir>/external/<method>/episodes.jsonl; std across
-                   episodes (there is nothing else to take it over).
+                   For human / frontier: >= n_eval episodes under
+                   <exp_dir>/external/<method>/episodes.jsonl.
   train    blue    fallback: last `train_window` episodes of each run's
-                   train_episodes.jsonl (pull_run.sh -t), per-run mean, then
-                   mean / std across runs. Training worlds, not held-out ones.
+                   train_episodes.jsonl (pull_run.sh -t). Training worlds,
+                   not held-out ones.
   partial  orange  some eval episodes but fewer than n_eval, and nothing to
                    fall back on (external methods, or RL with no train data).
   missing  red     nothing on disk.
@@ -32,6 +29,13 @@ Each cell resolves to one of:
 Only the FIRST n_eval eval episodes (by episode_idx) of each run are used, so
 every cell is scored on the same n_eval worlds even where one run was
 evaluated on more.
+
+Mean and std are over EPISODES, all qualifying seeds pooled (RL: n_seeds x
+n_eval episodes; human / frontier: their n_eval). So every +- is the same
+thing -- spread across eval worlds (and, for RL, runs) -- and an RL cell is
+comparable with the human / frontier cells, which have no seeds to take a
+spread over. With n_eval episodes per seed the pooled mean equals the mean of
+per-seed means. Training-run variability alone is NOT what the +- shows.
 
 Writes the tabular-only .tex (the paper keeps its own table env + caption and
 pulls it in with \\input), a status markdown next to it, and prints the same
@@ -223,9 +227,8 @@ def fmt_steps(v: int | None) -> str:
 # ─────────────────────────────────────────────
 
 def agg(values: list[float]) -> tuple[float, float]:
-    """(mean, std) of the per-seed (RL) or per-episode (human / frontier)
-    samples; the cell keeps the samples too, under `samples`, for
-    make_final_boxplots.py."""
+    """(mean, std) of the per-episode samples (all seeds pooled); the cell
+    keeps the samples too, under `samples`, for make_final_boxplots.py."""
     arr = np.asarray(values, dtype=float)
     std = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
     return float(arr.mean()), std
@@ -233,11 +236,12 @@ def agg(values: list[float]) -> tuple[float, float]:
 
 def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
                     eval_only: bool = False) -> dict:
-    """eval_only (make_final_boxplots.py): never fall back to training data; the
-    samples are the individual eval episodes (first n_eval) pooled over every seed
-    with a complete, provenance-checked eval -- spread across worlds, not seeds.
-    Status `eval` as soon as ONE seed has a complete eval; seeds without one are
-    left out and named in the note."""
+    """Samples are the individual episodes pooled over the seeds (eval: first
+    n_eval of every seed with a complete, provenance-checked eval; train: last
+    train_window of every run) -- spread across worlds, not seeds. Status `eval`
+    as soon as ONE seed has a complete eval; seeds without one are left out and
+    named in the note. eval_only (make_final_boxplots.py): never fall back to
+    training data."""
     n_eval, window = cfg["n_eval"], cfg["train_window"]
     out = {"status": "missing", "values": {}, "samples": {}, "seeds": "0/?", "steps": "-",
            "eval_eps": "-", "note": ""}
@@ -303,12 +307,7 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
     if eval_ok:
         out["status"] = "eval"
         for m in metrics:
-            if eval_only:
-                out["samples"][m] = pooled_episodes(eval_ok, m)
-            elif len(eval_ok) == 1:  # one seed: spread across its worlds, not a 0 std
-                out["samples"][m] = [float(v) for v in eval_ok[0][m]]
-            else:
-                out["samples"][m] = [float(df[m].mean()) for df in eval_ok]
+            out["samples"][m] = pooled_episodes(eval_ok, m)
             out["values"][m] = agg(out["samples"][m])
         if len(eval_ok) < expected:
             incomplete = [f"seed{r['seed']}({c})" for r, c in zip(runs, eval_counts) if c < n_eval]
@@ -329,7 +328,7 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
     if train:
         out["status"] = "train"
         for m in metrics:
-            out["samples"][m] = [float(df.tail(window)[m].mean()) for df in train]
+            out["samples"][m] = pooled_episodes([df.tail(window) for df in train], m)
             out["values"][m] = agg(out["samples"][m])
         if any(("difficulty" in df.columns) for df in train):
             ds = [float(df.tail(window)["difficulty"].mean()) for df in train
@@ -342,7 +341,7 @@ def resolve_rl_cell(spec: dict, method: str, cfg: dict, metrics: list[str],
         out["status"] = "partial"
         pool = [first_n(r["eval_df"], n_eval) for r in runs if r["eval_df"] is not None]
         for m in metrics:
-            out["samples"][m] = [float(df[m].mean()) for df in pool]
+            out["samples"][m] = pooled_episodes(pool, m)
             out["values"][m] = agg(out["samples"][m])
         notes.insert(0, f"eval < {n_eval} eps on every seed, no train data")
     else:

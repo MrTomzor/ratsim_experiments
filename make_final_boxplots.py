@@ -101,6 +101,7 @@ def draw_box(ax, row: dict, cells: dict, methods: list[str], metric: str, cfg: d
              colors: dict, args, show_ticklabels: bool = True) -> None:
     shown = [m for m in methods if cells[m]["status"] != "na"]
     rng = np.random.default_rng(0)
+    ymin = 0.0
     for i, m in enumerate(shown):
         vals = np.asarray(cells[m].get("samples", {}).get(metric) or [], dtype=float)
         if len(vals) == 0:
@@ -111,7 +112,12 @@ def draw_box(ax, row: dict, cells: dict, methods: list[str], metric: str, cfg: d
         # bar from 0 to the mean, error bar = +-1 std over the samples
         ax.bar(i, vals.mean(), width=0.6, color=matplotlib.colors.to_rgba(c, 0.35),
                edgecolor=c, lw=1.0, zorder=2)
-        ax.errorbar(i, vals.mean(), yerr=vals.std(), fmt="none", ecolor="black",
+        # lower whisker clipped at 0 so a low mean with high variance can't pull the
+        # axis below 0 and leave the bar floating above the frame
+        mean, std = vals.mean(), vals.std()
+        yerr = [[min(std, max(mean, 0.0))], [std]]
+        ymin = min(ymin, vals.min(), mean)
+        ax.errorbar(i, mean, yerr=yerr, fmt="none", ecolor="black",
                     elinewidth=1.1, capsize=4, zorder=4)
         if args.points:
             jitter = rng.uniform(-0.15, 0.15, len(vals)) if len(vals) > 1 else np.zeros(1)
@@ -121,6 +127,7 @@ def draw_box(ax, row: dict, cells: dict, methods: list[str], metric: str, cfg: d
                        fontsize=args.fontsize - 1, rotation=args.rotate,
                        ha="right" if args.rotate else "center")
     ax.set_xlim(-0.6, len(shown) - 0.4)
+    ax.set_ylim(bottom=ymin)  # 0 unless a sample/mean is actually negative
     ax.set_title(row["label"], fontsize=args.fontsize + 1)
     ax.tick_params(axis="y", labelsize=args.fontsize - 1)
     ax.grid(True, axis="y", alpha=0.3)

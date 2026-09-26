@@ -5,6 +5,7 @@
     ~/ratvenv/venv/bin/python make_training_figure.py --metrics total_score,objects_found
     ~/ratvenv/venv/bin/python make_training_figure.py --xmax longest         # x-axis to the longest curve
     ~/ratvenv/venv/bin/python make_training_figure.py --min-seeds 0 --per-seed
+    ~/ratvenv/venv/bin/python make_training_figure.py --band episodes --name ep   # per-episode std band
     ~/ratvenv/venv/bin/python make_training_figure.py --layout tall          # 4x2 portrait (or --cols N)
 
     # any def(s), paper row or not -- to see whether it belongs in the paper
@@ -27,7 +28,9 @@ table -- with a faint +/-1 std band. Methods listed in a row's `na:` are left ou
 
 Curves: per seed, a rolling mean over --rolling episodes against cumulative env
 steps; per method, the mean across seeds on a shared step grid with a +/-1 std
-band across seeds. By default the mean runs as far as any seed has data
+band across seeds (`--band episodes`: across the individual episodes in the
+rolling window, pooled over seeds -- the spread the eval and human / frontier
+bands show). By default the mean runs as far as any seed has data
 (`--min-seeds 1`), averaging whichever seeds reach each step; `--min-seeds K`
 stops it where fewer than K seeds have data, and `--min-seeds 0` where the
 shortest seed stops (same rule as analyze_experiment.py).
@@ -109,7 +112,8 @@ def def_target_steps(exp: str, exp_dir: Path | None) -> int | None:
 
 
 def seed_curves(spec: dict, method: str, metric: str, rolling: int) -> list[tuple]:
-    """[(cum_steps, rolling-mean metric)] per seed of `method` in this cell."""
+    """[(cum_steps, rolling mean, rolling mean of the square)] per seed of
+    `method` in this cell; the second moment is for the per-episode band."""
     exp_dir = find_exp_dir(spec["exp"], spec["source"])
     if exp_dir is None:
         return []
@@ -125,8 +129,10 @@ def seed_curves(spec: dict, method: str, metric: str, rolling: int) -> list[tupl
             continue
         df = train_step_axis(r)
         x = df["cum_steps"].to_numpy(dtype=float)
-        y = df[metric].astype(float).rolling(rolling, min_periods=1).mean().to_numpy()
-        out.append((x, y))
+        v = df[metric].astype(float)
+        y = v.rolling(rolling, min_periods=1).mean().to_numpy()
+        y2 = (v * v).rolling(rolling, min_periods=1).mean().to_numpy()
+        out.append((x, y, y2))
     return out
 
 
@@ -141,27 +147,38 @@ def external_values(spec: dict, method: str, metric: str, n_eval: int) -> np.nda
     return vals if len(vals) else None
 
 
-def mean_curve(curves: list[tuple], min_seeds: int) -> dict | None:
-    """Mean / std across seeds on a shared grid. Grid runs from the latest
-    seed start to the point where fewer than `min_seeds` seeds have data
-    (min_seeds=0 -> all seeds, i.e. the shortest seed's end)."""
+def mean_curve(curves: list[tuple], min_seeds: int, band: str = "seeds") -> dict | None:
+    """Mean / std on a shared grid. Grid runs from the latest seed start to the
+    point where fewer than `min_seeds` seeds have data (min_seeds=0 -> all
+    seeds, i.e. the shortest seed's end).
+
+    band="seeds": std of the per-seed rolling means. band="episodes": std of
+    the individual episodes in the rolling windows of all seeds present at
+    that step, pooled with equal weight per seed -- the same kind of spread
+    as the human / frontier bands and the eval tables' per-episode std."""
     n = len(curves)
     need = n if min_seeds <= 0 else min(min_seeds, n)
-    ends = sorted((x[-1] for x, _ in curves), reverse=True)
-    x_lo = max(x[0] for x, _ in curves)
+    ends = sorted((c[0][-1] for c in curves), reverse=True)
+    x_lo = max(c[0][0] for c in curves)
     x_hi = ends[need - 1]
     if x_hi <= x_lo:
         return None
     grid = np.linspace(x_lo, x_hi, N_GRID)
     ys = np.full((n, N_GRID), np.nan)
-    for i, (x, y) in enumerate(curves):
+    y2s = np.full((n, N_GRID), np.nan)
+    for i, (x, y, y2) in enumerate(curves):
         inside = grid <= x[-1]
         ys[i, inside] = np.interp(grid[inside], x, y)
+        y2s[i, inside] = np.interp(grid[inside], x, y2)
     count = np.sum(~np.isnan(ys), axis=0)
     mean = np.nanmean(ys, axis=0)
-    std = np.zeros(N_GRID)
-    multi = count > 1
-    std[multi] = np.nanstd(ys[:, multi], axis=0, ddof=1)
+    if band == "episodes":
+        # pooled E[v^2] - E[v]^2 = mean within-seed variance + between-seed spread
+        std = np.sqrt(np.clip(np.nanmean(y2s, axis=0) - mean ** 2, 0, None))
+    else:
+        std = np.zeros(N_GRID)
+        multi = count > 1
+        std[multi] = np.nanstd(ys[:, multi], axis=0, ddof=1)
     return {"x": grid, "mean": mean, "std": std, "count": count, "n": n}
 
 
@@ -189,10 +206,10 @@ def draw_panel(ax, row: dict, methods: list[str], metric: str, args, cfg: dict,
         if not curves:
             notes.append(f"{m}: no train data")
             continue
-        mc = mean_curve(curves, args.min_seeds)
+        mc = mean_curve(curves, args.min_seeds, args.band)
         c = colors[m]
         if args.per_seed:
-            for x, y in curves:
+            for x, y, _ in curves:
                 ax.plot(x / 1e6, y, color=c, lw=0.6, alpha=0.3)
                 x_end = max(x_end, float(x[-1]))
         if mc is None:
@@ -357,7 +374,7 @@ def make_figure(rows: list[dict], methods: list[str], metric: str, args, cfg: di
     fig, axes = plt.subplots(nrows, ncols, figsize=(args.panel_w * ncols, args.panel_h * nrows),
                              squeeze=False)
     print(f"\n[training_figure] {metric}  (rolling={args.rolling}, xmax={args.xmax}, "
-          f"min_seeds={args.min_seeds or 'all'})")
+          f"min_seeds={args.min_seeds or 'all'}, band={args.band})")
     for k, row in enumerate(rows):
         ax = axes[k // ncols][k % ncols]
         info = draw_panel(ax, row, methods, metric, args, cfg, colors)
@@ -398,6 +415,10 @@ def main() -> None:
     ap.add_argument("--min-seeds", type=int, default=1, dest="min_seeds",
                     help="continue the mean while >= K seeds have data (default 1 = as far as "
                          "any seed goes; 0 = all seeds)")
+    ap.add_argument("--band", choices=["seeds", "episodes"], default="seeds",
+                    help="+/-1 std band across seeds' rolling means (default), or across "
+                         "the individual episodes in the rolling window (like the eval / "
+                         "human / frontier spread)")
     ap.add_argument("--per-seed", action="store_true", dest="per_seed",
                     help="also draw thin per-seed lines")
     ap.add_argument("--rows", default=None, help="subset of table rows (labels or exp ids)")
