@@ -79,7 +79,7 @@ CAPS = {
 # above. Access is membership in the `deadline` unix group, which is granted
 # for a deadline and then removed — so flip this back to False afterwards, or
 # every submission gets rejected. `--no-deadline` overrides it per submission.
-USE_DEADLINE = True
+USE_DEADLINE = False  # partitions removed from RCI by 2026-10-01
 DEADLINE_LIMIT = 24 * 3600
 
 DEFAULT_CPU_MACHINE = "rci"
